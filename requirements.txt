@@ -1,0 +1,6 @@
+matplotlib
+numpy
+packaging
+pandas[output-formatting]
+pybamm[bpx] >= 25.1
+bpx >= 0.5, < 0.6
