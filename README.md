@@ -1,6 +1,6 @@
 # AEPyBaMM
 
-**AEPyBaMM** (`aepybamm`) is a Python library that supports the use of About:Energy's **Electrochemical** models (such as [About:DFN](https://aboutenergy.notion.site/About-DFN-Documentation-0c4a5b0ebb974441ab4783dd2f1d4d81#c73e7cd04ac64c0bbc061bbf74087e28)) in the [PyBaMM](https://pybamm.org/) implementation.
+**AEPyBaMM** (`aepybamm`) is a Python library that supports the use of [About:Energy](https://www.aboutenergy.io/)'s **Electrochemical** models (such as [About:DFN](https://aboutenergy.notion.site/About-DFN-Documentation-0c4a5b0ebb974441ab4783dd2f1d4d81#c73e7cd04ac64c0bbc061bbf74087e28)) in the [PyBaMM](https://pybamm.org/) implementation.
 
 AEPyBaMM is an interface between the [PyBaMM](https://pybamm.org) package for battery modelling and the [BPX](https://bpxstandard.com) package for expression of electrochemical parameter sets. AEPyBaMM v0.1. requires PyBaMM v25.1 and BPX v0.5.
 
