@@ -1,0 +1,35 @@
+[build-system]
+requires = [
+    "hatchling",
+]
+build-backend = "hatchling.build"
+
+[project]
+name = "aepybamm"
+version = "0.1"
+authors = [
+  { name="About:Energy Limited", email="edmund@aboutenergy.co.uk" },
+]
+description = "Interfacing between About:Energy's BPX electrochemical parameter sets for batteries and the PyBaMM package for battery modelling."
+readme = "README.md"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "packaging",
+    "pandas[output-formatting]",
+    "pybamm[bpx] >= 25.1",
+    "bpx >= 0.5, < 0.6",
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "BSD-3-Clause"
+license-files = ["LICEN[CS]E*"]
+
+[project.urls]
+Homepage = "https://github.com/About-Energy-OpenSource/AEPyBaMM"
+Issues = "https://github.com/About-Energy-OpenSource/AEPyBaMM/issues"
+Changelog = "https://github.com/About-Energy-OpenSource/AEPyBaMM/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/About-Energy-OpenSource/AEPyBaMM/blob/main/README.md"
