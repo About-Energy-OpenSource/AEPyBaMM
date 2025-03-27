@@ -2,7 +2,7 @@
       "Header": {
             "BPX": 0.5,
             "Title": "About:Energy Gen1 Demo 21700 NMC811|graphite 5 Ah cell",
-            "Description": "About:Energy Gen1 Demo 21700 NMC811|graphite 5 Ah cell physics-based parameterisation. This is a fictitious cell used for technology demonstration. Some data are taken from literature: Nyman et al. 2008 (doi:10.1016/j.electacta.2008.04.023); Chen et al. 2020 (doi:10.1149/1945-7111/ab9050); O'Regan et al. 2022 (doi:10.1016/j.electacta.2022.140700).",
+            "Description": "About:Energy Gen1 Demo 21700 NMC811|graphite 5 Ah cell physics-based parameterisation, v2.0 (March 2025). This is a fictitious cell used for technology demonstration. Some data are taken from literature: Nyman et al. 2008 (doi:10.1016/j.electacta.2008.04.023); Chen et al. 2020 (doi:10.1149/1945-7111/ab9050); O'Regan et al. 2022 (doi:10.1016/j.electacta.2022.140700).",
             "Model": "DFN"
       },
       "Parameterisation": {
@@ -54,8 +54,8 @@
                   "Entropic change coefficient [V.K-1]": "4.006e-5 * exp(-((x - 0.2828) ** 2) / 0.0009855) - 6.656e-5 * exp(-((x - 0.8032) ** 2) / 0.02179)",
                   "Conductivity [S.m-1]": 1,
                   "Surface area per unit volume [m-1]": 450000,
-                  "Porosity": 0.335,
-                  "Transport efficiency": 0.19390,
+                  "Porosity": 0.25,
+                  "Transport efficiency": 0.125,
                   "Reaction rate constant [mol.m-2.s-1]": 5e-05,
                   "Minimum stoichiometry": 0.2780,
                   "Maximum stoichiometry": 0.9671,

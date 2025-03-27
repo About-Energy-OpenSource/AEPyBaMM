@@ -107,7 +107,7 @@ def get_params(
         Set the SOC initialisation according to a particular hysteresis branch, in case of blended electrode.
         This functionality is explicitly targeted at mixed negative electrodes and assumes that there is
         zero hysteresis at the SOC100 limit. SOC_init is interpreted coulombically relative to SOC100.
-        Ignored if blended_electrode == None or hysteresis_model == None.
+        Ignored if blended_electrode == None (False, False) or hysteresis_model == "none".
         Allowed values: "average" (default), "charge", "discharge"
     add_hysteresis_heat_source : bool (optional, default: False)
         Set True to add the missing hysteresis heat source in PyBaMM's electrochemical heat source model (https://github.com/pybamm-team/PyBaMM/issues/3867).
@@ -127,6 +127,7 @@ def get_params(
     # Process arguments
     required_model_opts = {}
     extra_model_opts = extra_model_opts or {}
+    blended_electrode = blended_electrode or (False, False)
     _validate_args_get_params(**locals())
     fp_bpx = _get_bpx_src(fp, parameter_set)
 
@@ -138,7 +139,7 @@ def get_params(
     build_exchange_current_density(parameter_values)
     build_BPX_incompatible(parameter_values)
 
-    # Apply  heat transfer coefficient
+    # Apply heat transfer coefficient
     if htc_ext is not None:
         apply_htc_ext(parameter_values, htc_ext)
 
@@ -323,8 +324,6 @@ def apply_htc_ext(parameter_values, htc_ext):
 
 
 def _get_phases_by_electrode(blended_electrode):
-    blended_electrode = blended_electrode or (False, False)
-
     phases_by_electrode = [
         [s + ": " for s in PYBAMM_MATERIAL_NAMES] if blended else [""]
         for blended in blended_electrode
@@ -345,8 +344,8 @@ def _validate_phases_by_electrode(parameter_values, phases_by_electrode):
                 and any("Secondary:" in k for k in parameter_values)
             ):
                 raise ValueError(
-                    f"No parameter data found to treat {electrode.lower()} electrode as blended material."
-                    + " Try disabling the 'blended_electrode' keyword argument to get_params()."
+                    f"No parameter data found to treat {electrode.lower()} electrode as blended material. "
+                    "Try disabling the 'blended_electrode' keyword argument to get_params()."
                 )
         else:
             if (
@@ -354,8 +353,8 @@ def _validate_phases_by_electrode(parameter_values, phases_by_electrode):
                 not in parameter_values
             ):
                 raise ValueError(
-                    f"No parameter data to treat {electrode.lower()} electrode as single-material."
-                    + " Try setting the 'blended_electrode' keyword argument to get_params()."
+                    f"No parameter data to treat {electrode.lower()} electrode as single-material. "
+                    "Try setting the 'blended_electrode' keyword argument to get_params()."
                 )
 
 
@@ -376,7 +375,7 @@ def build_exchange_current_density(parameter_values):
         )
 
         del parameter_values[param]
-        del parameter_values[param.replace(tag_j0, "reaction rate constant [mol.m-2.s-1]")]    
+        del parameter_values[param.replace(tag_j0, "reaction rate constant [mol.m-2.s-1]")]
 
 
 def build_BPX_incompatible(parameter_values):
@@ -466,7 +465,7 @@ def apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_elect
                 # Enforce zero switching factor
                 key_switch = f"{phase + electrode} particle hysteresis switching factor"
                 if key_switch in parameter_values and parameter_values[key_switch] != 0:
-                    raise ValueError(key_switch + " only supported with zero value.")
+                    raise ValueError(f"{key_switch} only supported with zero value.")
 
                 # Set initial condition
                 key_init = f"{phase}Initial hysteresis state in {electrode.lower()} electrode"
@@ -481,7 +480,7 @@ def apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_elect
 
                 # Rebuild parameters for compatibility with "Wycisk" (one-state) OCP
                 for param in PARAMS_HYSTERESIS_DIFF:
-                    key = phase + electrode + " electrode " + param
+                    key = F"{phase}{electrode} electrode {param}"
                     parameter_values[key] = _make_hysteresis_compatible(parameter_values[key])
 
 
@@ -504,36 +503,42 @@ def _validate_args_get_params(
     hysteresis_branch,
     hysteresis_preceding_state,
     blended_electrode,
+    add_hysteresis_heat_source,
     extra_model_opts,
     # no runtime validation checking on remaining arguments
     **kwargs,
 ):
     if model_type not in VALID_MODEL_TYPES:
         raise ValueError(
-            f"Unsupported model type '{model_type}'. " + 
+            f"Unsupported model type '{model_type}'. "
             f"Supported model types are: {', '.join(VALID_MODEL_TYPES)}"
         )
 
     if hysteresis_model not in VALID_HYSTERESIS_MODELS:
         raise ValueError(
-            f"Unsupported hysteresis model type '{hysteresis_model}'. " + 
+            f"Unsupported hysteresis model type '{hysteresis_model}'. "
             f"Supported hysteresis model types are: {', '.join(VALID_HYSTERESIS_MODELS)}"
         )
     
     if hysteresis_branch not in VALID_HYSTERESIS_BRANCHES:
         raise ValueError(
-            f"Unsupported hysteresis branch '{hysteresis_branch}'. " +
+            f"Unsupported hysteresis branch '{hysteresis_branch}'. "
             f"Supported model types are: {', '.join(VALID_HYSTERESIS_BRANCHES)}"
         )
     
     if hysteresis_preceding_state not in VALID_HYSTERESIS_BRANCHES:
         raise ValueError(
-            f"Unsupported hysteresis preceding state '{hysteresis_preceding_state}'. " +
+            f"Unsupported hysteresis preceding state '{hysteresis_preceding_state}'. "
             f"Supported model types are: {', '.join(VALID_HYSTERESIS_BRANCHES)}"
         )
 
+    if add_hysteresis_heat_source and hysteresis_model != "one-state":
+        raise NotImplementedError(
+            "Hysteresis heat source can only be added to 'one-state' hysteresis model."
+        )
+
     if degradation_state is not None:
-        if blended_electrode is not None or hysteresis_model != "none":
+        if any(blended_electrode) or hysteresis_model != "none":
             raise NotImplementedError(
                 "Degradation state is only supported for single-phase electrodes with no hysteresis."
             )
@@ -557,7 +562,7 @@ def _validate_args_get_params(
         )
 
     if OCV_init is not None:
-        if blended_electrode is not None or hysteresis_model != "none":
+        if any(blended_electrode) or hysteresis_model != "none":
             raise NotImplementedError(
                 "Voltage-based initialisation is only supported for single-phase electrodes with no hysteresis."
             )
@@ -566,7 +571,7 @@ def _validate_args_get_params(
         if not isinstance(SOC_definition, dict) or "data" not in SOC_definition:
             raise TypeError("SOC_definition must be a dict containing a key 'data'")
 
-        if blended_electrode is not None or hysteresis_model != "none":
+        if any(blended_electrode) or hysteresis_model != "none":
             raise NotImplementedError(
                 "OCV-SOC conversion is only supported for single-phase electrodes with no hysteresis."
             )

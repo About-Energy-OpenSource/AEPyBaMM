@@ -65,7 +65,7 @@ def _scale_param(param, scaling):
     if callable(param):
         def func_revised(*args, **kwargs):
             return scaling * param(*args, **kwargs)
-        
+
         return func_revised
     else:
         return scaling * param
@@ -96,11 +96,11 @@ def _add_hysteresis_heat_source(model):
     for electrode in ELECTRODES:
         electrode_options = getattr(model.options, electrode.lower())
         num_phases = int(electrode_options["particle phases"])
-        
+
         phases = [""]
         if num_phases > 1:
             phases = [(s.lower() + " ") for s in PYBAMM_MATERIAL_NAMES]
-        
+
         hysteresis_models = electrode_options["open-circuit potential"]
         if isinstance(hysteresis_models, str):
             hysteresis_models = [hysteresis_models]
@@ -186,7 +186,7 @@ def _eval_OCP(Ufunc, xLi):
     """
     try:
         value = Ufunc(xLi)
-    except ValueError as err:
+    except (AttributeError, ValueError) as err:
         if isinstance(xLi, np.ndarray):
             value = Ufunc(pybamm.Vector(xLi))
         else:
@@ -235,10 +235,10 @@ def process_userdefined_parameters(parameter_values, fp):
             # Substitute imported materials with appropriate PyBaMM equivalents
             for original_name, pybamm_name in zip(electrode_material_names, PYBAMM_MATERIAL_NAMES):
                 original_prefix = original_name + ": "
-                new_prefix = pybamm_name + ": "              
-                
+                new_prefix = pybamm_name + ": "
+
                 params_to_replace = [k for k in parameter_values if k.startswith(original_prefix)]
-                
+
                 params_new = {
                     param.replace(original_prefix, new_prefix): parameter_values.pop(param)
                     for param in params_to_replace
@@ -298,7 +298,7 @@ def strip_parameter_values(parameter_values):
     params_to_strip = set()
     for s in unused_param_substrings:
         params_to_strip.update([k for k in parameter_values if s in k])
-    
+
     for param in params_to_strip:
         del parameter_values[param]
 

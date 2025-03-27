@@ -59,7 +59,7 @@ def solve_from_expdata(
     drive_cycle = drive_cycle[idx, :]
 
     if verbose and n_removed > 0:
-        print(f"Removed {n_removed} data point{'s' if n_removed > 1 else ''}" +
+        print(f"Removed {n_removed} data point{'s' if n_removed > 1 else ''}"
                " with duplicate or negligibly differing time values.")
 
     # Create current interpolant
@@ -78,10 +78,10 @@ def solve_from_expdata(
 
     if use_exp_temp:
         # Check for a single matching experimental temperature data input
-        exp_temp_keys = [k for k in ["T", "T_degC"] if k in dict_cols]                
+        exp_temp_keys = [k for k in ["T", "T_degC"] if k in dict_cols]
         if len(exp_temp_keys) != 1:
-            raise ValueError("Controlled temperature from experiment ('use_exp_temp') " +
-                             "requires a unique specified experimental temperature time series " +
+            raise ValueError("Controlled temperature from experiment ('use_exp_temp') "
+                             "requires a unique specified experimental temperature time series "
                              "with 'dict_cols' key either 'T' (K) or 'T_degC' (degC).")
         exp_temp_key = exp_temp_keys[0]
 
@@ -99,7 +99,7 @@ def solve_from_expdata(
                 )
 
                 return (dc + np.finfo(float).eps * y)
-            
+
             temperature_interpolant = func_temp_drive_cycle
         else:
             # Expected approach without workaround
@@ -156,5 +156,5 @@ def solve_from_expdata(
 
     # Solve
     sol = sim.solve(calc_esoh=False)
-   
+
     return sol
