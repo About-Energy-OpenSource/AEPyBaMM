@@ -23,11 +23,11 @@ def _map_hysteresis_init_state(hysteresis_preceding_state, hysteresis_model_el, 
     branch = ""
     if hysteresis_model_el != "single" and hysteresis_preceding_state != "average":
         branch = HYSTERESIS_BRANCH_MAP[hysteresis_preceding_state][el]
-    
+
     if len(branch) > 0:
         # Add extra space for insertion in parameter key
         branch += " "
-    
+
     return branch
 
 
@@ -46,10 +46,7 @@ def _is_monotonic(data):
     return np.all(np.diff(data[:, 1]) > 0)
 
 
-def _get_lithiation_bounds(parameter_values, blended_electrode=None):
-    if blended_electrode is None:
-        blended_electrode = (False, False)
-
+def _get_lithiation_bounds(parameter_values, blended_electrode=(False, False)):
     if not isinstance(blended_electrode, tuple) or len(blended_electrode) != 2:
         raise TypeError("2-tuple expected in _get_lithiation_bounds().")
 
@@ -225,7 +222,13 @@ def compute_lithiation_bounds(parameter_values):
     return lithiation_bounds
 
 
-def add_initial_concentrations(parameter_values, phases_by_electrode, hysteresis_init_branches=None, SOC_init=1, update_bounds=False):
+def add_initial_concentrations(
+    parameter_values,
+    phases_by_electrode,
+    hysteresis_init_branches=None,
+    SOC_init=1,
+    update_bounds=False,
+):
     """
     Add initial concentrations to pybamm.ParameterValues.
 
@@ -285,9 +288,9 @@ def add_initial_concentrations(parameter_values, phases_by_electrode, hysteresis
         ]
         phiact_neg_phases = [parameter_values[f"{phase}Negative electrode active material volume fraction"] for phase in phases_neg]
         csat_neg_phases = [parameter_values[f"{phase}Maximum concentration in negative electrode [mol.m-3]"] for phase in phases_neg]
-        
+
         # Compute lithiation proportions
-        phiact_tot_neg = sum(phiact for phiact in phiact_neg_phases)
+        phiact_tot_neg = sum(phiact_neg_phases)
         cmax_neg_phases = [csat * phiact / phiact_tot_neg for csat, phiact in zip(csat_neg_phases, phiact_neg_phases)]
         ctot = sum(cmax_neg_phases)
         qprop_neg_phases = [(cmax / ctot) for cmax in cmax_neg_phases]
@@ -338,7 +341,7 @@ def get_ocv_thermodynamic(parameter_values, num=201):
     soc = np.linspace(0, 1, num=num)
     xLi_neg = lithiation_bounds["negative"][0] + (soc * dxLi_neg)
     xLi_pos = lithiation_bounds["positive"][1] - (soc * dxLi_pos)
-    
+
     ocv = (
         _eval_OCP(parameter_values["Positive electrode OCP [V]"], xLi_pos)
         - _eval_OCP(parameter_values["Negative electrode OCP [V]"], xLi_neg)

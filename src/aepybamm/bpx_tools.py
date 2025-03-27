@@ -22,7 +22,8 @@ def validate_BPX_version():
         )
     if BPX_version > BPX_VERSION_LATEST:
         print(
-            f"Warning: running with BPX {BPX_version}. Latest tested version is {BPX_VERSION_LATEST}. Functionality is not guaranteed."
+            f"Warning: running with BPX {BPX_version}. Latest tested version is {BPX_VERSION_LATEST}."
+            "Functionality is not guaranteed."
         )
 
 
@@ -41,7 +42,7 @@ def _get_material_names(parameter_set):
     )
 
     material_names = tuple(
-        [k for k in electrode.particle.keys()] if is_multimaterial(electrode)
+        list(electrode.particle.keys()) if is_multimaterial(electrode)
         else ""
         for electrode in electrodes
     )
