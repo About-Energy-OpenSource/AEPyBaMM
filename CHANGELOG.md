@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.1 - 2025-03-27
+
+### Added
+
+- Added supplementary examples and parameters for an NMC cell and an LFP cell (from legacy [BPX release information](https://github.com/About-Energy-OpenSource/About-Energy-BPX-Parameterisation)).
+
+### Fixed
+
+- The minimum Python version requirement (3.9) is stated correctly.
+- Fixed error cases when calling `get_params()` with functional open-circuit potential input.
+- Fixed incorrect RMSE in `compare()` if the time series does not start at t = 0.
+- Tidied argument validation in various functions.
+
+### Changed
+
+- Updated the About:Energy Gen1 demo cell parameters (in BPX JSON) to v2.0, correcting unphysical porosity for positive electrode.
+- Updated the time-averaged RMSE evaluation method in `compare()` to weight each neighbouring data point equally in each time interval.
+- Minor internal refactors.
+
 ## v0.1 - 2025-02-04
 
 Initial release.
