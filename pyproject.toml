@@ -20,7 +20,7 @@ dependencies = [
     "pybamm[bpx] >= 25.1",
     "bpx >= 0.5, < 0.6",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
