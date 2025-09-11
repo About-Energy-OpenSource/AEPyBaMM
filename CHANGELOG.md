@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Updated `solve_from_expdata()` to use the IDAKLU solver.
 - Updated `pybamm` dependency to `>=25.4,<=25.8`. PyBaMM 25.1 is no longer supported.
+- Updated `Python` dependency to `>=3.10`.
 - Hysteresis definition has been updated to support up to PyBaMM 25.8.
 
 ## v0.1.1 - 2025-03-27
