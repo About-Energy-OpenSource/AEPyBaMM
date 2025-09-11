@@ -3,6 +3,7 @@ import os
 
 import numpy as np
 from pybamm import constants
+from packaging.version import Version
 
 from .func import (
     _make_generic_func_ce_T,
@@ -17,6 +18,7 @@ from .pybamm_tools import (
     get_default_parameter_values,
     get_model_class,
     validate_PyBaMM_version,
+    get_PyBaMM_version,
 )
 from .sci_tools import (
     HYSTERESIS_BRANCH_MAP,
@@ -110,7 +112,8 @@ def get_params(
         Ignored if blended_electrode == None (False, False) or hysteresis_model == "none".
         Allowed values: "average" (default), "charge", "discharge"
     add_hysteresis_heat_source : bool (optional, default: False)
-        Set True to add the missing hysteresis heat source in PyBaMM's electrochemical heat source model (https://github.com/pybamm-team/PyBaMM/issues/3867).
+        Set True to add a hysteresis heat source to PyBaMM's electrochemical heat source model (https://github.com/pybamm-team/PyBaMM/issues/3867).
+        Used for PyBaMM < 25.8 only. This setting has no effect for later versions, where hysteresis heat source is already included (https://github.com/pybamm-team/PyBaMM/pull/4893).
         Requires that all heat sources can be computed for isothermal models.
         One-state hysteresis only; not currently compatible with zero-state hysteresis.
     blended_electrode : 2-tuple of bool (optional) or None
@@ -431,10 +434,15 @@ def apply_hysteresis_branch(parameter_values, hysteresis_branch, phases_by_elect
 
 
 def get_hysteresis_model_by_electrode(hysteresis_model, parameter_values, electrode, phases):
+    PyBaMM_version = get_PyBaMM_version()
     if hysteresis_model == "zero-state":
         hysteresis_model_PyBaMM = "current sigmoid"
     elif hysteresis_model == "one-state":
         hysteresis_model_PyBaMM = "Wycisk"
+
+        if PyBaMM_version == Version("25.8"):
+            hysteresis_model_PyBaMM = "one-state differential capacity hysteresis"
+
     else:
         raise ValueError(f"Invalid hysteresis model: {hysteresis_model}")
 
@@ -461,7 +469,7 @@ def apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_elect
             use_hysteresis_electrode = (use_hysteresis_electrode,)
 
         for phase, use_hysteresis_phase in zip(phases, list(use_hysteresis_electrode)):
-            if use_hysteresis_phase == "Wycisk":
+            if use_hysteresis_phase == "Wycisk" or use_hysteresis_phase == "one-state differential capacity hysteresis":
                 # Enforce zero switching factor
                 key_switch = f"{phase + electrode} particle hysteresis switching factor"
                 if key_switch in parameter_values and parameter_values[key_switch] != 0:

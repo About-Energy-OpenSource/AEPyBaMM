@@ -48,9 +48,10 @@ def solve_from_expdata(
 
     # Offset time to zero, trim after stated tmax
     drive_cycle[:, dict_cols["t"]] -= drive_cycle[0, dict_cols["t"]]
-
     if tmax is not None:
         drive_cycle = drive_cycle[(drive_cycle[:, dict_cols["t"]] <= tmax), :]
+    else:
+        tmax = drive_cycle[-1, dict_cols["t"]]
 
     # Remove duplicate time instances and sort
     # Retain only first instance at each timestamp, in case of duplicates
@@ -117,15 +118,32 @@ def solve_from_expdata(
         )
     
     default_tolerances = {
-        "atol": 1e-6,
+        "atol": 1e-4,
         "rtol": 1e-6,
     }
-    if dt_safe_drive_cycle is None:
-        # Default time stepping
-        solver = pybamm.CasadiSolver("fast", **default_tolerances)
+    options = {}
+
+    if dt_safe_drive_cycle is not None:
+        options.update({"dt_max": dt_safe_drive_cycle})
+
+    solver = pybamm.IDAKLUSolver(
+        **default_tolerances,
+        options=options,
+    )
+
+    solver_opts = {}
+    if dt_safe_drive_cycle is not None:
+        nsteps = int(np.ceil(tmax / dt_safe_drive_cycle))
+        t_eval = np.linspace(drive_cycle[0, dict_cols["t"]], nsteps * dt_safe_drive_cycle, num=(nsteps + 1))
+        t_eval[-1] = tmax
     else:
-        # Constrained time stepping
-        solver = pybamm.CasadiSolver("safe", dt_max=dt_safe_drive_cycle, **default_tolerances)
+        t_eval = [drive_cycle[0, dict_cols["t"]], tmax]
+
+    solver_opts = {
+        "calc_esoh": False,
+        "t_eval": t_eval,
+        "t_interp": drive_cycle[:, dict_cols["t"]],
+    }
 
     submesh_types = model.default_submesh_types
     domains_micro = ["positive particle", "negative particle"]
@@ -155,6 +173,6 @@ def solve_from_expdata(
     )
 
     # Solve
-    sol = sim.solve(calc_esoh=False)
+    sol = sim.solve(**solver_opts)
 
     return sol

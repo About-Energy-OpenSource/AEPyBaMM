@@ -15,8 +15,8 @@ from .func import (
     _make_OCP,
 )
 
-PYBAMM_VERSION_MINIMUM = Version("25.1")
-PYBAMM_VERSION_LATEST = Version("25.1.1")
+PYBAMM_VERSION_MINIMUM = Version("25.4")
+PYBAMM_VERSION_LATEST = Version("25.8.0")
 
 ELECTRODES = ["Negative", "Positive"]
 PYBAMM_MATERIAL_NAMES = ["Primary", "Secondary"]
@@ -89,6 +89,11 @@ def _make_hysteresis_compatible(func_PyBaMM):
 
 
 def _add_hysteresis_heat_source(model):
+    PyBaMM_version = get_PyBaMM_version()
+    if PyBaMM_version == Version("25.8"):
+        # PyBaMM 25.8 already includes the hysteresis heat source, so don't allow any manual changes!
+        return
+
     thermal_model = model.submodels["thermal"]
 
     # Compute supplementary heat source variables
@@ -112,7 +117,7 @@ def _add_hysteresis_heat_source(model):
                 V_hys_el = 0
             elif hysteresis_model == 'current sigmoid':
                 raise NotImplementedError("Hysteresis heat source is not yet supported for zero-state hysteresis.")
-            elif hysteresis_model == 'Wycisk':
+            elif hysteresis_model == 'Wycisk' or hysteresis_model == 'one-state differential capacity hysteresis':
                 V_hys_el = (
                     model.variables[f"{electrode} electrode {phase}OCP hysteresis [V]"]
                     * model.variables[f"{electrode} electrode {phase}hysteresis state distribution"]
@@ -262,13 +267,16 @@ def process_userdefined_parameters(parameter_values, fp):
             phase = ""
             electrode = param.split()[0]
         electrode += " electrode"
+        
+        PyBaMM_version = get_PyBaMM_version()
+        
+        if PyBaMM_version < Version("25.8"):
+            avol_phase = parameter_values[f"{phase}{electrode} surface area per unit volume [m-1]"]
+            L_el = parameter_values[f"{electrode} thickness [m]"]
+            Ageom_cell = parameter_values["Electrode area [m2]"]
 
-        avol_phase = parameter_values[f"{phase}{electrode} surface area per unit volume [m-1]"]
-        L_el = parameter_values[f"{electrode} thickness [m]"]
-        Ageom_cell = parameter_values["Electrode area [m2]"]
-
-        # Note(ED): assumes scalar value
-        parameter_values[param] *= avol_phase * L_el * Ageom_cell / 3600
+            # Note(ED): assumes scalar value
+            parameter_values[param] *= avol_phase * L_el * Ageom_cell / 3600
 
 
 def fix_parameter_values(parameter_values):
@@ -277,7 +285,7 @@ def fix_parameter_values(parameter_values):
     """
     PyBaMM_version = get_PyBaMM_version()
 
-    # No known bugs in PyBaMM 25.1 (only supported version)
+    # No known bugs in PyBaMM 25.4 to 25.8
     # When needed, filter on PyBaMM_version to implement version-specific bug fixes
     pass
 
