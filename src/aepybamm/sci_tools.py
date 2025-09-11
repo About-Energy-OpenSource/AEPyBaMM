@@ -1,9 +1,11 @@
 import numpy as np
+from packaging.version import Version
 from scipy.optimize import fsolve, minimize
 
 from .pybamm_tools import (
     ELECTRODES,
     _eval_OCP,
+    get_PyBaMM_version,
 )
 
 HYSTERESIS_BRANCHES_ELECTRODE = ["delithiation", "lithiation"]
@@ -16,6 +18,11 @@ HYSTERESIS_BRANCH_MAP = {
         "Negative": "delithiation",
         "Positive": "lithiation",
     },
+}
+HYSTERESIS_INIT_STATE_VALS = {
+    "": 0,
+    "delithiation": 1,
+    "lithiation": -1,
 }
 
 
@@ -141,9 +148,6 @@ def calc_xLi_init(rel_xLi_ave, lithiation_bounds_mat, ocp_mat=None, qprop_mat=No
             for lithiation_bounds in lithiation_bounds_mat
         ]
 
-        # Initial guesses
-        x0 = 0.5 * np.ones(nmat + 1)
-
         def func(x1):
             xLi_mat = x1[:-1]
             Ueq = x1[-1]
@@ -162,8 +166,15 @@ def calc_xLi_init(rel_xLi_ave, lithiation_bounds_mat, ocp_mat=None, qprop_mat=No
 
             residual.append(residual_mat_constraint)
             return residual
+        
+        try:
+            x0 = 0.5 * np.ones(nmat + 1)
+            x1 = _fsolve_safe(func, x0)
+        except RuntimeError:
+            # Try with a different initial guess
+            x0 = 0.1 * np.ones(nmat + 1)
+            x1 = _fsolve_safe(func, x0)
 
-        x1 = _fsolve_safe(func, x0)
         return x1[:-1]
 
 
@@ -221,7 +232,6 @@ def compute_lithiation_bounds(parameter_values):
     }
     return lithiation_bounds
 
-
 def add_initial_concentrations(
     parameter_values,
     phases_by_electrode,
@@ -236,6 +246,8 @@ def add_initial_concentrations(
 
     update_bounds - set True to force recomputation of lithiation bounds. IMPORTANT: not compatible with hysteresis or single-phase electrode. Guarded in main function.
     """
+    PyBaMM_version = get_PyBaMM_version()
+
     phases_neg, _ = phases_by_electrode
     hysteresis_init_branches = hysteresis_init_branches or ("", "")
     hysteresis_init_branch_neg, hysteresis_init_branch_pos = hysteresis_init_branches
@@ -277,6 +289,14 @@ def add_initial_concentrations(
         # Apply hysteresis setting to Si component only
         hysteresis_init_branch_neg = ("", hysteresis_init_branch_neg)
 
+    if PyBaMM_version == Version("25.8"):
+        # Add initial hysteresis state
+        for phase, hysteresis_init_branch in zip(phases_neg, hysteresis_init_branch_neg):
+            parameter_values.update(
+                {f"{phase}Initial hysteresis state in negative electrode": HYSTERESIS_INIT_STATE_VALS[hysteresis_init_branch]},
+                check_already_exists=False,
+            )
+
     if len(phases_neg) == 1:
         xLi_neg = calc_xLi_init(SOC_init, lithiation_bounds["negative"])
         c0_vals_neg = { "Initial concentration in negative electrode [mol.m-3]": xLi_neg * parameter_values["Maximum concentration in negative electrode [mol.m-3]"] }
@@ -313,7 +333,6 @@ def add_initial_concentrations(
         c0_vals,
         check_already_exists=False,
     )
-
 
 def get_ocv_thermodynamic(parameter_values, num=201):
     """
