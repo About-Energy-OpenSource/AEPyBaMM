@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.2 - 2025-09-11
+
+### Fixed
+- Fixed convergence issues for specific initial condition and parameter set combinations.
+
+### Changed
+
+- Updated `solve_from_expdata()` to use the IDAKLU solver.
+- Updated `pybamm` dependency to `>=25.4,<=25.8`. PyBaMM 25.1 is no longer supported.
+- Hysteresis definition has been updated to support up to PyBaMM 25.8.
+
 ## v0.1.1 - 2025-03-27
 
 ### Added
