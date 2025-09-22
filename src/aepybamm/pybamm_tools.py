@@ -61,6 +61,17 @@ class quiet_pybamm:
         pybamm.logger.setLevel(self.original_logging_level)
 
 
+def _as_PyBaMM_option(x):
+    '''
+    Convert a 2-tuple of lists, representing two multi-material electrodes, to a 2-tuple of tuples or single values
+    '''
+    out = tuple([
+        tuple(x_el) if len(x_el) > 1 else x_el[0]
+        for x_el in x
+    ])
+    return out
+
+
 def _scale_param(param, scaling):
     if callable(param):
         def func_revised(*args, **kwargs):
@@ -220,21 +231,22 @@ def get_default_parameter_values(fp):
         # Do not pass SOC_init, initial concentrations will be added by the package
         parameter_values = pybamm.ParameterValues.create_from_bpx(fp)
 
-    process_userdefined_parameters(parameter_values, fp)
-    fix_parameter_values(parameter_values)
+    params_bpx = as_bpx(fp)
+    process_userdefined_parameters(parameter_values, params_bpx)
+    fix_parameter_values(parameter_values, params_bpx)
     strip_parameter_values(parameter_values)
 
     return parameter_values
 
 
-def process_userdefined_parameters(parameter_values, fp):
+def process_userdefined_parameters(parameter_values, params_bpx):
     """
     Apply processing to convert scalar parameters in user-defined BPX fields
     from About:Energy standards to expected PyBaMM format.
     """
 
     # Patch material names to PyBaMM requirements
-    all_material_names = _get_material_names(as_bpx(fp))
+    all_material_names = _get_material_names(params_bpx)
     for electrode_material_names in all_material_names:
         if len(electrode_material_names) > 1:
             # Substitute imported materials with appropriate PyBaMM equivalents
@@ -269,25 +281,36 @@ def process_userdefined_parameters(parameter_values, fp):
         electrode += " electrode"
         
         PyBaMM_version = get_PyBaMM_version()
-        
-        if PyBaMM_version < Version("25.8"):
-            avol_phase = parameter_values[f"{phase}{electrode} surface area per unit volume [m-1]"]
-            L_el = parameter_values[f"{electrode} thickness [m]"]
-            Ageom_cell = parameter_values["Electrode area [m2]"]
+        n_electrodes = (parameter_values["Number of electrodes connected in parallel to make a cell"] if PyBaMM_version >= Version("25.8.0") else 1)
+        avol_phase = parameter_values[f"{phase}{electrode} surface area per unit volume [m-1]"]
+        L_el = parameter_values[f"{electrode} thickness [m]"]
+        Ageom_cell = parameter_values["Electrode area [m2]"]
 
-            # Note(ED): assumes scalar value
-            parameter_values[param] *= avol_phase * L_el * Ageom_cell / 3600
+        # Note(ED): assumes scalar value
+        parameter_values[param] *= avol_phase * L_el * Ageom_cell * n_electrodes / 3600
 
 
-def fix_parameter_values(parameter_values):
+def fix_parameter_values(parameter_values, params_bpx):
     """
     Fix known bugs in output from pybamm.ParameterValues.create_from_bpx()
     """
     PyBaMM_version = get_PyBaMM_version()
 
-    # No known bugs in PyBaMM 25.4 to 25.8
-    # When needed, filter on PyBaMM_version to implement version-specific bug fixes
-    pass
+    if PyBaMM_version <= Version("25.8"):
+        # Workaround for incorrect porosity import
+        # - https://github.com/pybamm-team/PyBaMM/issues/5193, not fixed as of PyBaMM 25.8
+        domains_bpx = (
+            params_bpx.parameterisation.negative_electrode,
+            params_bpx.parameterisation.separator,
+            params_bpx.parameterisation.positive_electrode,
+        )
+        domains_pybamm = ("Negative electrode", "Separator", "Positive electrode")
+
+        for domain_pybamm, domain_bpx in zip(domains_pybamm, domains_bpx):
+            parameter_values[f"{domain_pybamm} porosity"] = domain_bpx.porosity
+            parameter_values[f"{domain_pybamm} Bruggeman coefficient (electrolyte)"] = (
+                np.log(domain_bpx.transport_efficiency) / np.log(domain_bpx.porosity)
+            )
 
 
 def strip_parameter_values(parameter_values):
