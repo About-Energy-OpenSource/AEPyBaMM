@@ -13,6 +13,7 @@ from .func import (
 from .pybamm_tools import (
     PYBAMM_MATERIAL_NAMES,
     _add_hysteresis_heat_source,
+    _as_PyBaMM_option,
     _make_hysteresis_compatible,
     _scale_param,
     get_default_parameter_values,
@@ -21,19 +22,21 @@ from .pybamm_tools import (
     get_PyBaMM_version,
 )
 from .sci_tools import (
+    ELECTRODES,
     HYSTERESIS_BRANCH_MAP,
     HYSTERESIS_BRANCHES_ELECTRODE,
-    ELECTRODES,
+    VALID_HYSTERESIS_BRANCHES,
     _get_hysteresis_init_branch_electrode,
+    _validate_in_list,
     add_initial_concentrations,
     calc_lithium_inventory,
+    convert_ocv_to_soc,
     convert_soc,
     get_ocv_thermodynamic,
 )
 
 VALID_MODEL_TYPES = ["DFN", "SPMe", "SPM"]
 VALID_HYSTERESIS_MODELS = ["none", "zero-state", "one-state"]
-VALID_HYSTERESIS_BRANCHES = ["average", "charge", "discharge"]
 VALID_DEGRADATION_KEYS = [
     "LAM_NE",
     "LAM_PE",
@@ -147,15 +150,7 @@ def get_params(
         apply_htc_ext(parameter_values, htc_ext)
 
     # Apply degradation state
-    degradation_state = {
-        k: v for k, v in degradation_state.items()
-        if v != 0
-    } if degradation_state is not None else None
-    if degradation_state == {}:
-        # All user-provided degradation state values were zero
-        # Should do nothing, so act hereafter as if no degradation state applies
-        degradation_state = None
-
+    degradation_state = _rationalize_degradation_state(degradation_state)
     if degradation_state is not None:
         apply_degradation_state(parameter_values, degradation_state)
 
@@ -184,11 +179,12 @@ def get_params(
     # Hysteresis model handling
     if hysteresis_model == "none":
         hysteresis_init_branches = None
+        use_hysteresis = (["single"], ["single"])
         if hysteresis_branch != "average":
             apply_hysteresis_branch(parameter_values, hysteresis_branch, phases_by_electrode)
     else:
         # Case where hysteresis_model != "none"
-        use_hysteresis = [
+        use_hysteresis = tuple(
             get_hysteresis_model_by_electrode(
                 hysteresis_model,
                 parameter_values,
@@ -196,7 +192,7 @@ def get_params(
                 phases,
             )
             for electrode, phases in zip(ELECTRODES, phases_by_electrode)
-        ]
+        )
 
         if hysteresis_model == "one-state":
             apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_electrode)
@@ -207,7 +203,7 @@ def get_params(
         )
 
         hysteresis_model_opts = {
-            "open-circuit potential": tuple(use_hysteresis),
+            "open-circuit potential": _as_PyBaMM_option(use_hysteresis),
         }
         if add_hysteresis_heat_source:
             hysteresis_model_opts.update(
@@ -219,11 +215,20 @@ def get_params(
         required_model_opts.update(hysteresis_model_opts)
 
     # Apply initial concentrations
+    SOC_init=convert_soc_init(
+        SOC_init,
+        OCV_init,
+        SOC_definition,
+        parameter_values,
+        phases_by_electrode,
+        use_hysteresis,
+        hysteresis_preceding_state,
+    )
     add_initial_concentrations(
         parameter_values,
         phases_by_electrode,
         hysteresis_init_branches=hysteresis_init_branches,
-        SOC_init=convert_soc_init(SOC_init, OCV_init, SOC_definition, parameter_values),
+        SOC_init=SOC_init,
         update_bounds=(degradation_state is not None),
     )
 
@@ -241,23 +246,53 @@ def get_params(
     return (parameter_values, model)
 
 
-def convert_soc_init(SOC_init, OCV_init, SOC_definition, parameter_values):
+def convert_soc_init(SOC_init, OCV_init, SOC_definition, parameter_values, phases_by_electrode, use_hysteresis, hysteresis_preceding_state):
     if OCV_init is not None:
-        ocv_soc = get_ocv_thermodynamic(parameter_values)
-        return np.interp(OCV_init, ocv_soc[:, 1], ocv_soc[:, 0])
+        try:
+            SOC_init = convert_ocv_to_soc(
+                OCV_init,
+                parameter_values,
+                phases_by_electrode,
+                use_hysteresis=use_hysteresis,
+                branch=hysteresis_preceding_state,
+            )
+        except RuntimeError:
+            ocv_soc = get_ocv_thermodynamic(
+                parameter_values,
+                phases_by_electrode,
+                use_hysteresis=use_hysteresis,
+                branch=hysteresis_preceding_state,
+            )
+            if OCV_init < ocv_soc[0, 1]:
+                # Linear extrapolate low
+                SOC_init = (
+                    ocv_soc[0, 1] + 
+                    (OCV_init - ocv_soc[0, 1]) * (ocv_soc[1, 1] - ocv_soc[0, 1]) / (ocv_soc[1, 0] - ocv_soc[0, 0])
+                )
+            elif OCV_init > ocv_soc[-1, 1]:
+                # Linear extrapolate high
+                SOC_init = (
+                    ocv_soc[-1, 1] + 
+                    (OCV_init - ocv_soc[-1, 1]) * (ocv_soc[-1, 1] - ocv_soc[-2, 1]) / (ocv_soc[-1, 0] - ocv_soc[-2, 0])
+                )
+            else:
+                # Linear interpolate
+                SOC_init = np.interp(OCV_init, ocv_soc[:, 1], ocv_soc[:, 0])
+
     elif SOC_definition is not None:
         if "method" not in SOC_definition:
             SOC_definition["method"] = "voltage"
 
         # Correct SOC from intended value on specified OCV-SOC scale to intended thermodynamic value
-        return convert_soc(
+        SOC_init = convert_soc(
             SOC_init,
             SOC_definition["data"],
-            get_ocv_thermodynamic(parameter_values),
+            get_ocv_thermodynamic(parameter_values, phases_by_electrode, branch="average"),
             SOC_definition["method"],
         )
-    else:
-        return SOC_init
+
+    # Return adapted value, or if no special setting, return input value
+    return SOC_init
 
 
 def apply_degradation_state(parameter_values, degradation_state):
@@ -327,10 +362,10 @@ def apply_htc_ext(parameter_values, htc_ext):
 
 
 def _get_phases_by_electrode(blended_electrode):
-    phases_by_electrode = [
-        [s + ": " for s in PYBAMM_MATERIAL_NAMES] if blended else [""]
-        for blended in blended_electrode
-    ]
+    phases_by_electrode = tuple([
+        [s + ": " for s in PYBAMM_MATERIAL_NAMES] if is_blended else [""]
+        for is_blended in blended_electrode
+    ])
 
     return phases_by_electrode
 
@@ -450,32 +485,25 @@ def get_hysteresis_model_by_electrode(hysteresis_model, parameter_values, electr
         _has_hysteresis_data(parameter_values, electrode, phase)
         for phase in phases
     ]
-    hysteresis_model_by_electrode = tuple(
+    hysteresis_model_by_electrode = [
         hysteresis_model_PyBaMM if has_hysteresis_data
         else "single"
         for has_hysteresis_data in has_hysteresis_data_by_phase
-    )
-
-    if len(phases) == 1:
-        hysteresis_model_by_electrode = hysteresis_model_by_electrode[0]
+    ]
 
     return hysteresis_model_by_electrode
 
 
 def apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_electrode):
     for electrode, phases, use_hysteresis_electrode in zip(ELECTRODES, phases_by_electrode, use_hysteresis):
-        if isinstance(use_hysteresis_electrode, str):
-            # Place scalar str in 1-tuple
-            use_hysteresis_electrode = (use_hysteresis_electrode,)
-
-        for phase, use_hysteresis_phase in zip(phases, list(use_hysteresis_electrode)):
+        for phase, use_hysteresis_phase in zip(phases, use_hysteresis_electrode):
             if use_hysteresis_phase == "Wycisk" or use_hysteresis_phase == "one-state differential capacity hysteresis":
                 # Enforce zero switching factor
                 key_switch = f"{phase + electrode} particle hysteresis switching factor"
                 if key_switch in parameter_values and parameter_values[key_switch] != 0:
                     raise ValueError(f"{key_switch} only supported with zero value.")
 
-                # Set initial condition
+                # Set generic initial condition when hysteresis is active
                 key_init = f"{phase}Initial hysteresis state in {electrode.lower()} electrode"
 
                 parameter_values.update(
@@ -516,29 +544,10 @@ def _validate_args_get_params(
     # no runtime validation checking on remaining arguments
     **kwargs,
 ):
-    if model_type not in VALID_MODEL_TYPES:
-        raise ValueError(
-            f"Unsupported model type '{model_type}'. "
-            f"Supported model types are: {', '.join(VALID_MODEL_TYPES)}"
-        )
-
-    if hysteresis_model not in VALID_HYSTERESIS_MODELS:
-        raise ValueError(
-            f"Unsupported hysteresis model type '{hysteresis_model}'. "
-            f"Supported hysteresis model types are: {', '.join(VALID_HYSTERESIS_MODELS)}"
-        )
-    
-    if hysteresis_branch not in VALID_HYSTERESIS_BRANCHES:
-        raise ValueError(
-            f"Unsupported hysteresis branch '{hysteresis_branch}'. "
-            f"Supported model types are: {', '.join(VALID_HYSTERESIS_BRANCHES)}"
-        )
-    
-    if hysteresis_preceding_state not in VALID_HYSTERESIS_BRANCHES:
-        raise ValueError(
-            f"Unsupported hysteresis preceding state '{hysteresis_preceding_state}'. "
-            f"Supported model types are: {', '.join(VALID_HYSTERESIS_BRANCHES)}"
-        )
+    _validate_in_list(model_type, VALID_MODEL_TYPES, "model type")
+    _validate_in_list(hysteresis_model, VALID_HYSTERESIS_MODELS, "hysteresis model")
+    _validate_in_list(hysteresis_branch, VALID_HYSTERESIS_BRANCHES, "hysteresis branch")
+    _validate_in_list(hysteresis_preceding_state, VALID_HYSTERESIS_BRANCHES, "hysteresis preceding state")
 
     if add_hysteresis_heat_source and hysteresis_model != "one-state":
         raise NotImplementedError(
@@ -555,10 +564,7 @@ def _validate_args_get_params(
             raise TypeError("'degradation_state' must be a 'dict'.")
 
         for k in degradation_state:
-            if k not in VALID_DEGRADATION_KEYS:
-                raise ValueError(
-                    f"Unsupported field in 'degradation_state': {k}. Supported fields are: {', '.join(VALID_DEGRADATION_KEYS)}"
-                )
+            _validate_in_list(k, VALID_DEGRADATION_KEYS, "degradation state field")
 
     if (
         "thermal" in extra_model_opts
@@ -568,12 +574,6 @@ def _validate_args_get_params(
         raise ValueError(
             "When using a thermal model, specify the heat transfer coefficient in 'get_params' with keyword argument 'htc_ext'."
         )
-
-    if OCV_init is not None:
-        if any(blended_electrode) or hysteresis_model != "none":
-            raise NotImplementedError(
-                "Voltage-based initialisation is only supported for single-phase electrodes with no hysteresis."
-            )
 
     if SOC_definition is not None:
         if not isinstance(SOC_definition, dict) or "data" not in SOC_definition:
@@ -612,6 +612,19 @@ def _get_bpx_src(fp, parameter_set=None):
         raise ValueError(f"No valid JSON header at {fp}.")
 
     return fp_src
+
+
+def _rationalize_degradation_state(degradation_state):
+    if degradation_state is None:
+        return None
+    
+    degradation_state_no_zeroes = {
+        k: v for k, v in degradation_state.items()
+        if v != 0
+    }
+
+    # If all user-provided degradation state values were zero, output is {}, return None
+    return (degradation_state_no_zeroes or None)
 
 
 def _combine_model_opts(required_model_opts, extra_model_opts):
