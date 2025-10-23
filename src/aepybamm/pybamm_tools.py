@@ -1,3 +1,4 @@
+import functools
 import logging
 import warnings
 from numbers import Number
@@ -12,6 +13,7 @@ from .bpx_tools import (
     validate_BPX_version,
 )
 from .func import (
+    _allow_unused_args_1d,
     _make_OCP,
 )
 
@@ -285,9 +287,16 @@ def process_userdefined_parameters(parameter_values, params_bpx):
         avol_phase = parameter_values[f"{phase}{electrode} surface area per unit volume [m-1]"]
         L_el = parameter_values[f"{electrode} thickness [m]"]
         Ageom_cell = parameter_values["Electrode area [m2]"]
+        decay_rate_multiplier = avol_phase * L_el * Ageom_cell * n_electrodes / 3600
 
-        # Note(ED): assumes scalar value
-        parameter_values[param] *= avol_phase * L_el * Ageom_cell * n_electrodes / 3600
+        if isinstance(parameter_values[param], functools.partial):
+            func_original = parameter_values[param].keywords['fun']
+            parameter_values[param] = _allow_unused_args_1d(
+                _scale_param(func_original, decay_rate_multiplier)
+            )
+        else:
+            # Scalar value
+            parameter_values[param] *= decay_rate_multiplier
 
 
 def fix_parameter_values(parameter_values, params_bpx):

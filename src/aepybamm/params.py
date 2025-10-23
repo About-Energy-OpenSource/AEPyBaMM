@@ -39,6 +39,8 @@ VALID_MODEL_TYPES = ["DFN", "SPMe", "SPM"]
 VALID_HYSTERESIS_MODELS = ["none", "zero-state", "one-state"]
 VALID_DEGRADATION_KEYS = [
     "LAM_NE",
+    "LAM_NE_C6",
+    "LAM_NE_Si",
     "LAM_PE",
     "LLI",
     "RI_far_NE",
@@ -46,6 +48,9 @@ VALID_DEGRADATION_KEYS = [
     "RI_electrolyte",
     "R0_addn [Ohm]",
 ]
+
+SINGLE_PHASE_LAM = ["LAM_NE", "LAM_PE"]
+MULTI_PHASE_LAM = ["LAM_NE_C6", "LAM_NE_Si", "LAM_PE"]
 
 PARAMS_HYSTERESIS_DIFF = [
     "lithiation OCP [V]",
@@ -67,6 +72,7 @@ def get_params(
     hysteresis_model="none",
     hysteresis_branch="average",
     hysteresis_preceding_state="average",
+    hysteresis_initial_state=None,
     blended_electrode=None,
     add_hysteresis_heat_source=False,
     extra_model_opts=None,
@@ -114,6 +120,11 @@ def get_params(
         zero hysteresis at the SOC100 limit. SOC_init is interpreted coulombically relative to SOC100.
         Ignored if blended_electrode == None (False, False) or hysteresis_model == "none".
         Allowed values: "average" (default), "charge", "discharge"
+    hysteresis_initial_state : str (optional)
+        Sets the value for the parameter "f"{phase}Initial hysteresis state in negative electrode" according to the specified hysteresis branch if PyBaMM >= 25.8. 
+        If not specified, it is set to hysteresis_preceding_state.
+        Ignored if blended_electrode == None (False, False) or hysteresis_model == "none" or PyBaMM < 25.8.
+        Allowed values: "average" (default), "charge", "discharge"
     add_hysteresis_heat_source : bool (optional, default: False)
         Set True to add a hysteresis heat source to PyBaMM's electrochemical heat source model (https://github.com/pybamm-team/PyBaMM/issues/3867).
         Used for PyBaMM < 25.8 only. This setting has no effect for later versions, where hysteresis heat source is already included (https://github.com/pybamm-team/PyBaMM/pull/4893).
@@ -149,11 +160,6 @@ def get_params(
     if htc_ext is not None:
         apply_htc_ext(parameter_values, htc_ext)
 
-    # Apply degradation state
-    degradation_state = _rationalize_degradation_state(degradation_state)
-    if degradation_state is not None:
-        apply_degradation_state(parameter_values, degradation_state)
-
     # Handle series resistance
     if (
         "Contact resistance [Ohm]" in parameter_values
@@ -176,9 +182,15 @@ def get_params(
         }
     )
 
+    # Apply degradation state
+    degradation_state = _rationalize_degradation_state(degradation_state)
+    if degradation_state is not None:
+        apply_degradation_state(parameter_values, degradation_state, phases_by_electrode)
+
     # Hysteresis model handling
     if hysteresis_model == "none":
-        hysteresis_init_branches = None
+        hysteresis_preceding_branches = None
+        hysteresis_initial_branches = None
         use_hysteresis = (["single"], ["single"])
         if hysteresis_branch != "average":
             apply_hysteresis_branch(parameter_values, hysteresis_branch, phases_by_electrode)
@@ -197,9 +209,18 @@ def get_params(
         if hysteresis_model == "one-state":
             apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_electrode)
 
-        hysteresis_init_branches = _get_hysteresis_init_branch_electrode(
+        # Set hysteresis_initial_state to hysteresis_preceding_state if not specified
+        if hysteresis_initial_state is None:
+            hysteresis_initial_state = hysteresis_preceding_state
+
+        hysteresis_preceding_branches = _get_hysteresis_init_branch_electrode(
             use_hysteresis,
             hysteresis_preceding_state,
+        )
+
+        hysteresis_initial_branches = _get_hysteresis_init_branch_electrode(
+            use_hysteresis,
+            hysteresis_initial_state,
         )
 
         hysteresis_model_opts = {
@@ -227,7 +248,8 @@ def get_params(
     add_initial_concentrations(
         parameter_values,
         phases_by_electrode,
-        hysteresis_init_branches=hysteresis_init_branches,
+        hysteresis_preceding_branches=hysteresis_preceding_branches,
+        hysteresis_initial_branches=hysteresis_initial_branches,
         SOC_init=SOC_init,
         update_bounds=(degradation_state is not None),
     )
@@ -295,11 +317,13 @@ def convert_soc_init(SOC_init, OCV_init, SOC_definition, parameter_values, phase
     return SOC_init
 
 
-def apply_degradation_state(parameter_values, degradation_state):
+def apply_degradation_state(parameter_values, degradation_state, phases_by_electrode):
     degradation_scaled_vals = {}
+    phases_neg, _ = phases_by_electrode
+    is_multi_phase = len(phases_neg) > 1
 
     # Compute cyclable lithium content from beginning-of-life parameter set
-    ncyc = calc_lithium_inventory(parameter_values)
+    ncyc = calc_lithium_inventory(parameter_values, phases_by_electrode)
 
     if "LLI" in degradation_state:
         # Apply LLI correction to cyclable lithium content
@@ -310,11 +334,24 @@ def apply_degradation_state(parameter_values, degradation_state):
     )
 
     # Apply LAM multiples
-    volume_fraction_params = [
-        f"{el} electrode active material volume fraction" for el in ELECTRODES
-    ]
+    LAM_losses = MULTI_PHASE_LAM if is_multi_phase else SINGLE_PHASE_LAM
+
+    if is_multi_phase and "LAM_NE" in degradation_state:
+        print("Warning: LAM_NE is being applied equally to both materials. "
+            "Consider using LAM_NE_C6 and LAM_NE_Si instead.")
+        degradation_state.update({
+            "LAM_NE_C6": degradation_state["LAM_NE"],
+            "LAM_NE_Si": degradation_state["LAM_NE"]
+        })
+    
+    volume_fraction_params = []
+    for el, phases in zip(ELECTRODES, phases_by_electrode):
+        for phase in phases:
+            param_name = f"{phase}{el} electrode active material volume fraction"
+            volume_fraction_params.append(param_name)
+
     updated_volume_fractions = {k: parameter_values[k] for k in volume_fraction_params}
-    for loss_factor, param in zip(["LAM_NE", "LAM_PE"], volume_fraction_params):
+    for loss_factor, param in zip(LAM_losses, volume_fraction_params):
         if loss_factor in degradation_state:
             mul_lam = 1 - degradation_state[loss_factor]
             updated_volume_fractions[param] *= mul_lam
@@ -555,11 +592,6 @@ def _validate_args_get_params(
         )
 
     if degradation_state is not None:
-        if any(blended_electrode) or hysteresis_model != "none":
-            raise NotImplementedError(
-                "Degradation state is only supported for single-phase electrodes with no hysteresis."
-            )
-
         if not isinstance(degradation_state, dict):
             raise TypeError("'degradation_state' must be a 'dict'.")
 

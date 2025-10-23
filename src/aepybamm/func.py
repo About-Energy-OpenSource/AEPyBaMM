@@ -95,6 +95,13 @@ def _make_j0_func(coeffs_const, func_premul=None):
     return func
 
 
+def _allow_unused_args_1d(func):
+    def _func_extended(x, *args):
+        return func(x)
+    
+    return _func_extended
+
+
 def _make_OCP(data, hysteresis_compatible=False):
     """
     Generate PyBaMM-compatible OCP interpolants.
