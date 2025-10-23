@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.4 - 2025-10-23
+
+### Added
+- Degradation state initialisation support for hysteresis and blended negative electrodes
+- Support for hysteresis initial state to be specified separately from preceding state
+- Parameterised hysteresis decay rate can now be a function of lithiation extent.
+
 ## v0.1.3 - 2025-09-22
 
 ### Added
