@@ -1,5 +1,3 @@
-from types import MethodType
-
 import pybamm
 
 
@@ -100,25 +98,3 @@ def _allow_unused_args_1d(func):
         return func(x)
     
     return _func_extended
-
-
-def _make_OCP(data, hysteresis_compatible=False):
-    """
-    Generate PyBaMM-compatible OCP interpolants.
-    """
-    def func(x, dummy_arg=None):
-        # dummy_arg is used to deal with 2D functions where the second argument goes unused
-        func_PyBaMM = pybamm.Interpolant(data[:, 0], data[:, 1], x)
-
-        if hysteresis_compatible:
-            # Monkey-patch a derivative for compatibility with "Wycisk" (one-state) OCP
-            def func_derivative(self, children, idx):
-                # Just return a constant because exponent of dU/dQ dependence is set to zero
-                # IMPORTANT: will not work in general cases
-                return pybamm.Scalar(1)
-
-            func_PyBaMM._function_diff = MethodType(func_derivative, func_PyBaMM)
-
-        return func_PyBaMM
-
-    return func
