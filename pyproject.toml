@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aepybamm"
-version = "0.1.4"
+version = "0.2.0"
 authors = [
   { name="About:Energy Limited", email="edmund@aboutenergy.co.uk" },
 ]
@@ -17,7 +17,7 @@ dependencies = [
     "numpy",
     "packaging",
     "pandas[output-formatting]",
-    "pybamm[bpx] >=25.4, <=25.8",
+    "pybamm[bpx] >=25.10",
     "bpx >= 0.5, < 0.6",
 ]
 requires-python = ">=3.10"
