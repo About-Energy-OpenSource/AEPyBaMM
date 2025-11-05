@@ -1,5 +1,4 @@
 import numpy as np
-from packaging.version import Version
 from scipy.optimize import fsolve, minimize
 
 from .pybamm_tools import (
@@ -47,10 +46,26 @@ def _map_hysteresis_init_state(hysteresis_preceding_state, hysteresis_model_el, 
     return branch
 
 
-def _get_hysteresis_init_branch_electrode(use_hysteresis, hysteresis_preceding_state):
+def _get_hysteresis_branch_electrode(use_hysteresis, branch_cell, by_material=False):
+    if by_material:
+        return tuple([
+            [
+                _map_hysteresis_init_state(branch_cell, [use_hysteresis_mat], el)
+                for use_hysteresis_mat in use_hysteresis_el
+            ]
+            for use_hysteresis_el, el in zip(use_hysteresis, ELECTRODES)
+        ])
+    else:
+        return tuple([
+            _map_hysteresis_init_state(branch_cell, use_hysteresis_el, el)
+            for use_hysteresis_el, el in zip(use_hysteresis, ELECTRODES)
+        ])
+
+
+def _get_null_use_hysteresis(phases_by_electrode):
     return tuple([
-        _map_hysteresis_init_state(hysteresis_preceding_state, use_hysteresis_el, el)
-        for use_hysteresis_el, el in zip(use_hysteresis, ELECTRODES)
+        ["single" for phase in phases]
+        for electrode, phases in zip(ELECTRODES, phases_by_electrode)
     ])
 
 
@@ -62,50 +77,43 @@ def _is_monotonic(data):
     return np.all(np.diff(data[:, 1]) > 0)
 
 
-def _get_lithiation_bounds(parameter_values, blended_electrode=(False, False)):
-    if not isinstance(blended_electrode, tuple) or len(blended_electrode) != 2:
-        raise TypeError("2-tuple expected in _get_lithiation_bounds().")
+def _get_lithiation_bounds(parameter_values, phases_by_electrode=None):
+    """
+    Get existing specification of lithiation bounds as:
+    
+    - a 2-tuple (neg, pos)
+      - of lists (materials by electrode)
+        - of 2-tuples (min, max lithiation bounds by material)
 
-    lithiation_bounds = {}
-    for electrode, is_blended in zip(ELECTRODES, blended_electrode):
-        stoichiometry_params = {
-            k: v for k, v in parameter_values.items()
-            if "stoichiometry" in k and electrode.capitalize() in k
-        }
+    Inputs:
 
-        if len(stoichiometry_params) == 2:
-            if not is_blended:
-                lithiation_bounds[electrode.lower()] = tuple(
-                    sorted(stoichiometry_params.values())
-                )
-            else:
-                raise ValueError(
-                    f"Missing stoichiometry specification for blended {electrode.lower()} electrode."
-                )
-        elif len(stoichiometry_params) >= 4:
-            try:
-                if is_blended:
-                    lithiation_bounds[electrode.lower()] = [
-                        tuple(
-                            sorted([v for k, v in stoichiometry_params.items() if phase in k])
-                        )
-                        for phase in ["Primary", "Secondary"]
-                    ]
-                else:
-                    stoichiometry_params_blended = {
-                        k: v for k, v in stoichiometry_params.items()
-                        if "Primary" not in k and "Secondary" not in k
-                    }
-                    lithiation_bounds[electrode.lower()] = tuple(
-                        sorted(stoichiometry_params_blended.values())
-                    )
-            except KeyError:
-                raise RuntimeError(
-                    f"Unexpected stoichiometry values in parameter set: {stoichiometry_params.keys()}."
-                )
+    parameter_values - pybamm.ParameterValues
+    phases_by_electrode (optional) - 2-tuple (neg, pos) of lists of phase prefixes
+    """
+    phases_by_electrode = phases_by_electrode or ([""], [""])
+
+    def _get_bounds(parameter_values, electrode, phase):
+        try:
+            bounds = tuple([
+                parameter_values[f"{phase}{electrode} electrode {bound} stoichiometry"]
+                for bound in ["minimum", "maximum"]
+            ])
+        except KeyError:
+            raise ValueError(
+                f"Missing stoichiometry specification for '{phase}{electrode} electrode'"
+            )
+        
+        return bounds
+
+    lithiation_bounds = tuple([
+        [
+            _get_bounds(parameter_values, electrode, phase)
+            for phase in phases
+        ]
+        for electrode, phases in zip(ELECTRODES, phases_by_electrode)
+    ])
 
     return lithiation_bounds
-
 
 def _fsolve_safe(*args, **kwargs):
     result, _, exit_code, message = fsolve(*args, **kwargs, full_output=True)
@@ -123,7 +131,7 @@ def calc_xLi_init(rel_xLi_ave, lithiation_bounds_mat, ocp_mat=None, qprop_mat=No
     Parameters
     ---
     rel_xLi_ave : lithiation relative to lithiation bounds (scalar proportion)
-    lithiation_bounds_mat : tuple (xLi_min, xLi_max) or list of tuples for blended electrode material
+    lithiation_bounds_mat : list of 2-tuples (min, max) for materials in electrode
     ocp_mat : list of OCP functions for each material (used only if lithiation_bounds_mat is list of len() > 1)
     qprop_mat: list of contributing charge capacity proportions for each material (used only if lithiation_bounds_mat is list of len() > 1)
     ---
@@ -133,15 +141,17 @@ def calc_xLi_init(rel_xLi_ave, lithiation_bounds_mat, ocp_mat=None, qprop_mat=No
     xLi_mat - list of xLi at SOC, or scalar if length 1
     ---
     """
-    if isinstance(lithiation_bounds_mat, list):
-        if len(lithiation_bounds_mat) > 1:
-            if (len(lithiation_bounds_mat) != len(ocp_mat)) or (len(lithiation_bounds_mat) != len(qprop_mat)):
-                raise ValueError(
-                    "For blended material, all _mat inputs must be lists of same length"
-                )
-        else:
-            # Unpack one-entry list
-            lithiation_bounds_mat = lithiation_bounds_mat[0]
+    if not isinstance(lithiation_bounds_mat, list):
+        raise TypeError("'lithiation_bounds_mat' must be list of tuples.")
+
+    if len(lithiation_bounds_mat) > 1:
+        if (len(lithiation_bounds_mat) != len(ocp_mat)) or (len(lithiation_bounds_mat) != len(qprop_mat)):
+            raise ValueError(
+                "For blended material, all _mat inputs must be lists of same length"
+            )
+    else:
+        # Unpack one-entry list
+        lithiation_bounds_mat = lithiation_bounds_mat[0]
 
     if not isinstance(lithiation_bounds_mat, list):
         # Single-material, linear relation only
@@ -175,14 +185,18 @@ def calc_xLi_init(rel_xLi_ave, lithiation_bounds_mat, ocp_mat=None, qprop_mat=No
 
             residual.append(residual_mat_constraint)
             return residual
-        
-        try:
-            x0 = 0.5 * np.ones(nmat + 1)
-            x1 = _fsolve_safe(func, x0)
-        except RuntimeError:
-            # Try with a different initial guess
-            x0 = 0.1 * np.ones(nmat + 1)
-            x1 = _fsolve_safe(func, x0)
+            
+        # Try a sequence of increasingly diverse starting guesses
+        _fsolve_error = None
+        for guess in (0.5, 0.01, 0.001, 0.0001):
+            try:
+                x0 = guess * np.ones(nmat + 1)
+                x1 = _fsolve_safe(func, x0)
+                break
+            except RuntimeError as err:
+                _fsolve_error = err
+        else:
+            raise _fsolve_error
 
         return x1[:-1]
 
@@ -191,15 +205,8 @@ def calc_lithium_inventory(parameter_values, phases_by_electrode):
     phases_neg, _ = phases_by_electrode
     # Add initial concentrations for multi-phase electrodes
     if len(phases_neg) > 1:
-        add_initial_concentrations(
-            parameter_values,
-            phases_by_electrode,
-            hysteresis_preceding_branches=None,
-            hysteresis_initial_branches=None,
-            SOC_init=1,
-            update_bounds=False,
-        )   
-    
+        add_initial_concentrations(parameter_values, phases_by_electrode)
+
     ncyc_ref = 0    
     for el, phases in zip(ELECTRODES, phases_by_electrode):
         for phase in phases:
@@ -212,93 +219,108 @@ def calc_lithium_inventory(parameter_values, phases_by_electrode):
     return ncyc_ref
 
 
-def compute_lithiation_bounds(parameter_values, phases_by_electrode):
+def compute_lithiation_bounds(parameter_values, phases_by_electrode, use_hysteresis=None):
+    """
+    Evaluate lithiation bounds as:
+    
+    - a 2-tuple (neg, pos)
+      - of lists (materials by electrode)
+        - of 2-tuples (min, max lithiation bounds by material)
+    """
     if "AE: Total cyclable lithium inventory [mol.m-2]" not in parameter_values:
         raise ValueError("Cyclable lithium inventory must be computed before calling.")
+
+    use_hysteresis = use_hysteresis or _get_null_use_hysteresis(phases_by_electrode)
 
     ncyc = parameter_values["AE: Total cyclable lithium inventory [mol.m-2]"]
     phases_neg, _ = phases_by_electrode
 
-    is_multi_phase = len(phases_neg) > 1
-
-    if is_multi_phase:
-        nsat_neg = tuple(
-                parameter_values[f"{phase}Maximum concentration in negative electrode [mol.m-3]"]
-                * parameter_values[f"{phase}Negative electrode active material volume fraction"]
-                * parameter_values[f"Negative electrode thickness [m]"] for phase in phases_neg
-            )
-        Uneg_primary = parameter_values[f"Primary: Negative electrode OCP [V]"]
-        Uneg_secondary_all = {branch: parameter_values[f"Secondary: Negative electrode {branch} OCP [V]"] for branch in HYSTERESIS_BRANCHES_ELECTRODE}
-    else:
-        nsat_neg = (parameter_values[f"Maximum concentration in negative electrode [mol.m-3]"]
-        * parameter_values[f"Negative electrode active material volume fraction"]
-        * parameter_values[f"Negative electrode thickness [m]"])
-        Uneg = parameter_values[f"Negative electrode OCP [V]"]
+    nsat_neg = [
+        parameter_values[f"{phase}Maximum concentration in negative electrode [mol.m-3]"]
+        * parameter_values[f"{phase}Negative electrode active material volume fraction"]
+        * parameter_values["Negative electrode thickness [m]"]
+        for phase in phases_neg
+    ]
+    hysteresis_branches_neg = {
+        branch_cell: _get_hysteresis_branch_electrode(
+            use_hysteresis,
+            branch_cell,
+            by_material=True,
+        )[0] for branch_cell in HYSTERESIS_BRANCH_MAP
+    }
+    ocp_neg = {
+        branch_cell: [
+            parameter_values[f"{phase}Negative electrode {branch}OCP [V]"]
+            for phase, branch in zip(phases_neg, hysteresis_branches_neg[branch_cell])
+        ]
+        for branch_cell in HYSTERESIS_BRANCH_MAP
+    }
 
     nsat_pos = (
         parameter_values["Maximum concentration in positive electrode [mol.m-3]"]
         * parameter_values["Positive electrode active material volume fraction"]
         * parameter_values["Positive electrode thickness [m]"]
     )
-    Upos = parameter_values["Positive electrode OCP [V]"]
+    ocp_pos = parameter_values["Positive electrode OCP [V]"]
     Veod = parameter_values["Lower voltage cut-off [V]"]
     Veoc = parameter_values["Upper voltage cut-off [V]"]
 
-    def lithium_balance(bounds, Vcell, hysteresis_branch):
-        if is_multi_phase:
-            xneg_primary, xneg_secondary, xpos = bounds
-            nsat_neg_primary, nsat_neg_secondary = nsat_neg
-            Uneg_secondary = Uneg_secondary_all[hysteresis_branch]
+    def balance(bounds, Vcell, hysteresis_branch):
+        # Unknowns:
+        # n lithiation extents for n-material negative electrode
+        # 1 lithiation extent for single material positive electrode
+        # 1 unknown negative electrode potential
+        xLi_neg = bounds[:-2]
+        xLi_pos = bounds[-2]
+        Uneg = bounds[-1]
 
-            return [
-                xneg_primary * nsat_neg_primary + xneg_secondary * nsat_neg_secondary + xpos * nsat_pos - ncyc,
-                _eval_OCP(Upos, xpos) - _eval_OCP(Uneg_primary, xneg_primary) - Vcell,
-                _eval_OCP(Uneg_secondary, xneg_secondary) - _eval_OCP(Uneg_primary, xneg_primary),
-            ]
+        ntot_neg = sum(
+            xLi_phase * nsat_phase
+            for xLi_phase, nsat_phase in zip(xLi_neg, nsat_neg)
+        )
+        ntot_pos = xLi_pos * nsat_pos
 
-        else:
-            xneg, xpos = bounds
-            return [
-                xneg * nsat_neg + xpos * nsat_pos - ncyc,
-                _eval_OCP(Upos, xpos) - _eval_OCP(Uneg, xneg) - Vcell,
-            ]
+        residual = [
+            # Equilibration of all negative electrode materials
+            (_eval_OCP(ocp, xLi) - Uneg)
+            for ocp, xLi in zip(ocp_neg[hysteresis_branch], xLi_neg)
+        ] + [
+            # Lithium inventory balance
+            ntot_neg + ntot_pos - ncyc,
+            # Thermodynamic voltage
+            _eval_OCP(ocp_pos, xLi_pos) - Uneg - Vcell,
+        ]
+        return residual
+    
     try:
-        if is_multi_phase:
-            lower_bounds_init = [0.1, 0.1, 0.9]
-            upper_bounds_init = [0.9, 0.9, 0.1]
-        else:
-            lower_bounds_init = [0.1, 0.9]
-            upper_bounds_init = [0.9, 0.1]
-        print("testing")
-        lower_bounds = _fsolve_safe(lithium_balance, lower_bounds_init, args=(Veod,"delithiation"))
-        upper_bounds = _fsolve_safe(lithium_balance, upper_bounds_init, args=(Veoc, "lithiation"))
+        bounds_init = (
+            [0.1] * len(phases_neg) + [0.9, _eval_OCP(ocp_neg["discharge"][0], 0.1)],
+            [0.9] * len(phases_neg) + [0.1, _eval_OCP(ocp_neg["charge"][0], 0.9)],
+        )
+
+        lower_bounds = _fsolve_safe(balance, bounds_init[0], args=(Veod, "discharge"))
+        upper_bounds = _fsolve_safe(balance, bounds_init[1], args=(Veoc, "charge"))
     except RuntimeError:
         # Try with a different initial guess
-        if is_multi_phase:
-            lower_bounds_init = [0.01, 0.01, 0.9]
-            upper_bounds_init = [0.9, 0.9, 0.01]
-        else:
-            lower_bounds_init = [0.01, 0.9]
-            upper_bounds_init = [0.9, 0.01]
+        bounds_init = (
+            [0.01] * len(phases_neg) + [0.9, _eval_OCP(ocp_neg["discharge"][0], 0.01)],
+            [0.9] * len(phases_neg)  + [0.01, _eval_OCP(ocp_neg["charge"][0], 0.9)],
+        )
 
-        lower_bounds = _fsolve_safe(lithium_balance, lower_bounds_init, args=(Veod,"delithiation"))
-        upper_bounds = _fsolve_safe(lithium_balance, upper_bounds_init, args=(Veoc, "lithiation"))
+        lower_bounds = _fsolve_safe(balance, bounds_init[0], args=(Veod, "discharge"))
+        upper_bounds = _fsolve_safe(balance, bounds_init[1], args=(Veoc, "charge"))
 
-    bounds_electrodes = list(zip(lower_bounds, upper_bounds))
-    if is_multi_phase:
-        return {
-            "negative": [tuple(sorted(bounds)) for bounds in bounds_electrodes[:-1]],
-            "positive": tuple(sorted(bounds_electrodes[-1]))
-        }
-    else:
-        return {
-            f"{el.lower()}": tuple(sorted(bounds))
-            for el, bounds in zip(ELECTRODES, bounds_electrodes)
-        }
+    bounds_all = [tuple(sorted(bounds)) for bounds in zip(lower_bounds, upper_bounds)]
+    bounds_neg = bounds_all[:-2]
+    bounds_pos = bounds_all[-2:-1]
+    
+    return bounds_neg, bounds_pos
+
 
 def add_initial_concentrations(
     parameter_values,
     phases_by_electrode,
+    use_hysteresis=None,
     hysteresis_preceding_branches=None,
     hysteresis_initial_branches=None,
     SOC_init=1,
@@ -313,27 +335,27 @@ def add_initial_concentrations(
     """
     PyBaMM_version = get_PyBaMM_version()
 
+    use_hysteresis = use_hysteresis or _get_null_use_hysteresis(phases_by_electrode)
+
     phases_neg, _ = phases_by_electrode
     hysteresis_preceding_branches = hysteresis_preceding_branches or ("", "")
     hysteresis_preceding_branch_neg, hysteresis_preceding_branch_pos = hysteresis_preceding_branches
     hysteresis_initial_branches = hysteresis_initial_branches or ("", "")
     hysteresis_initial_branch_neg, hysteresis_initial_branch_pos = hysteresis_initial_branches
 
-    if hysteresis_preceding_branch_pos != "" or hysteresis_initial_branch_pos != "":
+    if hysteresis_preceding_branch_pos != "":
         raise NotImplementedError("Hysteresis preceding state functionality is only supported for negative electrode blends.")
-
-    blended_electrode = tuple(
-        len(phases_el) > 1 for phases_el in phases_by_electrode
-    )
 
     if update_bounds:
         # Evaluate new lithiation bounds and store in the pybamm.ParameterValues object
-        lithiation_bounds = compute_lithiation_bounds(parameter_values, phases_by_electrode)
-        xLi_vals = {}
-        for electrode in ELECTRODES:
-            bounds_el = lithiation_bounds[electrode.lower()]
-            for str_bound, bound in zip(["minimum", "maximum"], bounds_el):
-                xLi_vals[f"{electrode} electrode {str_bound} stoichiometry"] = bound
+        lithiation_bounds = compute_lithiation_bounds(parameter_values, phases_by_electrode, use_hysteresis=use_hysteresis)
+
+        xLi_vals = {
+            f"{phase}{electrode} electrode {bound} stoichiometry": val
+            for electrode, phases, bounds_el in zip(ELECTRODES, phases_by_electrode, lithiation_bounds)
+            for phase, bounds_mat in zip(phases, bounds_el)
+            for bound, val in zip(["minimum", "maximum"], bounds_mat)           
+        }
 
         parameter_values.update(
             xLi_vals,
@@ -341,34 +363,36 @@ def add_initial_concentrations(
         )
     else:
         # Existing lithiation bounds are valid so just read them
-        lithiation_bounds = _get_lithiation_bounds(parameter_values, blended_electrode=blended_electrode)
+        lithiation_bounds = _get_lithiation_bounds(parameter_values, phases_by_electrode=phases_by_electrode)
 
     # Positive electrode
-    xLi_pos = calc_xLi_init(1 - SOC_init, lithiation_bounds["positive"])
+    lithiation_bounds_neg, lithiation_bounds_pos = lithiation_bounds
+    xLi_pos = calc_xLi_init(1 - SOC_init, lithiation_bounds_pos)
     c0_vals_pos = {
         "Initial concentration in positive electrode [mol.m-3]": xLi_pos * parameter_values["Maximum concentration in positive electrode [mol.m-3]"],
     }
 
     # Negative electrode
     phases_neg, _ = phases_by_electrode
+    
+    # Update initial hysteresis state for selected hysteresis branch
+    if len(phases_neg) > 1:
+        hysteresis_initial_branch_neg = ["", hysteresis_initial_branch_neg]
+    else: 
+        hysteresis_initial_branch_neg = [hysteresis_initial_branch_neg]
+    hysteresis_initial_branches = (hysteresis_initial_branch_neg, hysteresis_initial_branch_pos)
 
-    if PyBaMM_version >= Version("25.8"):
-        # Update initial hysteresis state for selected hysteresis branch
-        if len(phases_neg) > 1:
-            hysteresis_initial_branch_neg = ["", hysteresis_initial_branch_neg]
-        else: 
-            hysteresis_initial_branch_neg = [hysteresis_initial_branch_neg]
-
-        for phase, hysteresis_init_branch in zip(phases_neg, hysteresis_initial_branch_neg):
-            key_init_hysteresis_state = f"{phase}Initial hysteresis state in negative electrode"
-
-            if key_init_hysteresis_state in parameter_values:
+    for electrode, phases, use_hysteresis_electrode, hysteresis_initial_branches_el in zip(ELECTRODES, phases_by_electrode, use_hysteresis, hysteresis_initial_branches):
+        for phase, use_hysteresis_phase, hysteresis_initial_branch_phase in zip(phases, use_hysteresis_electrode, hysteresis_initial_branches_el):
+            if use_hysteresis_phase == "one-state hysteresis":
+                key_init_hysteresis_state = f"{phase}Initial hysteresis state in {electrode.lower()} electrode"
                 parameter_values.update(
-                    {key_init_hysteresis_state: HYSTERESIS_INIT_STATE_VALS[hysteresis_init_branch.rstrip()]}
+                    {key_init_hysteresis_state: HYSTERESIS_INIT_STATE_VALS[hysteresis_initial_branch_phase.rstrip()]},
+                    check_already_exists=False,
                 )
 
     if len(phases_neg) == 1:
-        xLi_neg = calc_xLi_init(SOC_init, lithiation_bounds["negative"])
+        xLi_neg = calc_xLi_init(SOC_init, lithiation_bounds_neg)
         c0_vals_neg = { "Initial concentration in negative electrode [mol.m-3]": xLi_neg * parameter_values["Maximum concentration in negative electrode [mol.m-3]"] }
     else:
         hysteresis_preceding_branch_neg = ["", hysteresis_preceding_branch_neg]
@@ -382,7 +406,7 @@ def add_initial_concentrations(
 
         xLi_neg_phases = calc_xLi_init(
             SOC_init,
-            lithiation_bounds["negative"],
+            lithiation_bounds_neg,
             ocp_mat=Uneg_phases,
             qprop_mat=qprop_neg_phases,
         )
@@ -418,15 +442,16 @@ def get_ocv_thermodynamic(parameter_values, phases_by_electrode, use_hysteresis=
     ---
     """
     _validate_in_list(branch, VALID_HYSTERESIS_BRANCHES, "hysteresis branch")
-    if use_hysteresis is None:
-        use_hysteresis = (['single'], ['single'])
+    use_hysteresis = use_hysteresis or _get_null_use_hysteresis(phases_by_electrode)
 
     soc = np.linspace(0, 1, num=num)
 
-    blended_electrode = tuple([len(phases) > 1 for phases in phases_by_electrode])
-    lithiation_bounds = _get_lithiation_bounds(parameter_values, blended_electrode=blended_electrode)
+    lithiation_bounds_neg, lithiation_bounds_pos = _get_lithiation_bounds(
+        parameter_values,
+        phases_by_electrode=phases_by_electrode,
+    )
     hysteresis_init_branch_neg, hysteresis_init_branch_pos = (
-        _get_hysteresis_init_branch_electrode(use_hysteresis, hysteresis_preceding_state=branch)
+        _get_hysteresis_branch_electrode(use_hysteresis, branch_cell=branch)
     )
     
     phases_neg, _ = phases_by_electrode
@@ -439,15 +464,13 @@ def get_ocv_thermodynamic(parameter_values, phases_by_electrode, use_hysteresis=
     else:
         phase_neg = ""
         branch_neg = hysteresis_init_branch_neg
-        bounds_neg = lithiation_bounds["negative"]
 
     branch_pos = hysteresis_init_branch_pos
-    bounds_pos = lithiation_bounds["positive"]
 
     # Positive electrode OCP lookup
     Upos = parameter_values[f"Positive electrode {branch_pos}OCP [V]"]
-    dxLi_pos = bounds_pos[1] - bounds_pos[0]
-    xLi_pos = bounds_pos[1] - (soc * dxLi_pos)
+    dxLi_pos = lithiation_bounds_pos[0][1] - lithiation_bounds_pos[0][0]
+    xLi_pos = lithiation_bounds_pos[0][1] - (soc * dxLi_pos)
 
     # Negative electrode OCP lookup
     Uneg = parameter_values[f"{phase_neg}Negative electrode {branch_neg}OCP [V]"]
@@ -459,7 +482,7 @@ def get_ocv_thermodynamic(parameter_values, phases_by_electrode, use_hysteresis=
                 xLi_neg.append(
                     calc_xLi_init(
                         soc_inst,
-                        lithiation_bounds["negative"],
+                        lithiation_bounds_neg,
                         ocp_mat=[
                             parameter_values[f"{phase}Negative electrode {branch_mat}OCP [V]"]
                             for phase, branch_mat in zip(phases_neg, branch_mat_neg)
@@ -480,8 +503,8 @@ def get_ocv_thermodynamic(parameter_values, phases_by_electrode, use_hysteresis=
                 raise ValueError("Not enough valid data points to interpolate")
 
     else:
-        dxLi_neg = bounds_neg[1] - bounds_neg[0]
-        xLi_neg = bounds_neg[0] + soc * dxLi_neg
+        dxLi_neg = lithiation_bounds_neg[0][1] - lithiation_bounds_neg[0][0]
+        xLi_neg = lithiation_bounds_neg[0][0] + soc * dxLi_neg
 
     ocv = _eval_OCP(Upos, xLi_pos) - _eval_OCP(Uneg, xLi_neg)
     return np.column_stack((soc, ocv))
@@ -631,23 +654,19 @@ def convert_ocv_to_soc(OCV_init, parameter_values, phases_by_electrode, use_hyst
     ---
     """
     _validate_in_list(branch, VALID_HYSTERESIS_BRANCHES, "hysteresis branch")
-    if use_hysteresis is None:
-        use_hysteresis = (['single'], ['single'])
+    use_hysteresis = use_hysteresis or _get_null_use_hysteresis(phases_by_electrode)
 
-    blended_electrode = tuple([len(phases) > 1 for phases in phases_by_electrode])
-    lithiation_bounds = _get_lithiation_bounds(parameter_values, blended_electrode=blended_electrode)
+    lithiation_bounds_neg, lithiation_bounds_pos = _get_lithiation_bounds(
+        parameter_values,
+        phases_by_electrode=phases_by_electrode,
+    )
     hysteresis_init_branch_neg, hysteresis_init_branch_pos = (
-        _get_hysteresis_init_branch_electrode(use_hysteresis, hysteresis_preceding_state=branch)
+        _get_hysteresis_branch_electrode(use_hysteresis, branch_cell=branch)
     )
     
     phases_neg, _ = phases_by_electrode
     nmat = len(phases_neg)
         
-    bounds_pos = lithiation_bounds["positive"]
-    bounds_neg = lithiation_bounds["negative"]
-    if nmat == 1:
-        bounds_neg = [bounds_neg]
-
     if nmat > 1:
         # Apply hysteresis to Si component only
         hysteresis_init_branch_neg = ['', hysteresis_init_branch_neg]
@@ -656,12 +675,12 @@ def convert_ocv_to_soc(OCV_init, parameter_values, phases_by_electrode, use_hyst
 
     dxLi_neg = [
         bounds_mat[1] - bounds_mat[0]
-        for bounds_mat in bounds_neg
+        for bounds_mat in lithiation_bounds_neg
     ]
 
     # Positive electrode OCP lookup
     Upos = parameter_values[f"Positive electrode {hysteresis_init_branch_pos}OCP [V]"]
-    dxLi_pos = bounds_pos[1] - bounds_pos[0]
+    dxLi_pos = lithiation_bounds_pos[0][1] - lithiation_bounds_pos[0][0]
 
     # Negative electrode OCP lookup
     Uneg = [
@@ -685,13 +704,13 @@ def convert_ocv_to_soc(OCV_init, parameter_values, phases_by_electrode, use_hyst
         # Total negative electrode contents sum to expected value
         residual_mat_constraint = sum([
             qprop * (xLi - bounds_mat[0]) / dxLi
-            for qprop, xLi, bounds_mat, dxLi in zip(qprop_neg, xLi_neg, bounds_neg, dxLi_neg)
+            for qprop, xLi, bounds_mat, dxLi in zip(qprop_neg, xLi_neg, lithiation_bounds_neg, dxLi_neg)
         ]) - soc
 
         residual.append(residual_mat_constraint)
 
         # OCV evaluates to expected value
-        xLi_pos = bounds_pos[1] - soc * dxLi_pos
+        xLi_pos = lithiation_bounds_pos[0][1] - soc * dxLi_pos
         val_Upos = _eval_OCP(Upos, xLi_pos)
         residual_ocv_constraint = val_Upos - val_Uneg - OCV_init
 

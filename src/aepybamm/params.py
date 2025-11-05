@@ -3,7 +3,6 @@ import os
 
 import numpy as np
 from pybamm import constants
-from packaging.version import Version
 
 from .func import (
     _make_generic_func_ce_T,
@@ -11,22 +10,21 @@ from .func import (
     _unflatten,
 )
 from .pybamm_tools import (
+    PYBAMM_HYSTERESIS_MODELS,
     PYBAMM_MATERIAL_NAMES,
-    _add_hysteresis_heat_source,
     _as_PyBaMM_option,
-    _make_hysteresis_compatible,
     _scale_param,
     get_default_parameter_values,
     get_model_class,
     validate_PyBaMM_version,
-    get_PyBaMM_version,
 )
 from .sci_tools import (
     ELECTRODES,
     HYSTERESIS_BRANCH_MAP,
     HYSTERESIS_BRANCHES_ELECTRODE,
     VALID_HYSTERESIS_BRANCHES,
-    _get_hysteresis_init_branch_electrode,
+    _get_hysteresis_branch_electrode,
+    _get_null_use_hysteresis,
     _validate_in_list,
     add_initial_concentrations,
     calc_lithium_inventory,
@@ -74,7 +72,6 @@ def get_params(
     hysteresis_preceding_state="average",
     hysteresis_initial_state=None,
     blended_electrode=None,
-    add_hysteresis_heat_source=False,
     extra_model_opts=None,
     trim_model_events=True,
 ):
@@ -121,15 +118,10 @@ def get_params(
         Ignored if blended_electrode == None (False, False) or hysteresis_model == "none".
         Allowed values: "average" (default), "charge", "discharge"
     hysteresis_initial_state : str (optional)
-        Sets the value for the parameter "f"{phase}Initial hysteresis state in negative electrode" according to the specified hysteresis branch if PyBaMM >= 25.8. 
+        Sets the value for the parameter "f"{phase}Initial hysteresis state in negative electrode" according to the specified hysteresis branch. 
         If not specified, it is set to hysteresis_preceding_state.
-        Ignored if blended_electrode == None (False, False) or hysteresis_model == "none" or PyBaMM < 25.8.
+        Ignored if blended_electrode == None (False, False) or hysteresis_model == "none".
         Allowed values: "average" (default), "charge", "discharge"
-    add_hysteresis_heat_source : bool (optional, default: False)
-        Set True to add a hysteresis heat source to PyBaMM's electrochemical heat source model (https://github.com/pybamm-team/PyBaMM/issues/3867).
-        Used for PyBaMM < 25.8 only. This setting has no effect for later versions, where hysteresis heat source is already included (https://github.com/pybamm-team/PyBaMM/pull/4893).
-        Requires that all heat sources can be computed for isothermal models.
-        One-state hysteresis only; not currently compatible with zero-state hysteresis.
     blended_electrode : 2-tuple of bool (optional) or None
         Default: None -> (False, False). Set True to use blended electrode data for (neg, pos) electrodes.
         Ignored if hysteresis_model == "none".
@@ -191,7 +183,7 @@ def get_params(
     if hysteresis_model == "none":
         hysteresis_preceding_branches = None
         hysteresis_initial_branches = None
-        use_hysteresis = (["single"], ["single"])
+        use_hysteresis = _get_null_use_hysteresis(phases_by_electrode)
         if hysteresis_branch != "average":
             apply_hysteresis_branch(parameter_values, hysteresis_branch, phases_by_electrode)
     else:
@@ -213,12 +205,12 @@ def get_params(
         if hysteresis_initial_state is None:
             hysteresis_initial_state = hysteresis_preceding_state
 
-        hysteresis_preceding_branches = _get_hysteresis_init_branch_electrode(
+        hysteresis_preceding_branches = _get_hysteresis_branch_electrode(
             use_hysteresis,
             hysteresis_preceding_state,
         )
 
-        hysteresis_initial_branches = _get_hysteresis_init_branch_electrode(
+        hysteresis_initial_branches = _get_hysteresis_branch_electrode(
             use_hysteresis,
             hysteresis_initial_state,
         )
@@ -226,12 +218,6 @@ def get_params(
         hysteresis_model_opts = {
             "open-circuit potential": _as_PyBaMM_option(use_hysteresis),
         }
-        if add_hysteresis_heat_source:
-            hysteresis_model_opts.update(
-                {
-                    "calculate heat source for isothermal models": "true",
-                },
-            )
 
         required_model_opts.update(hysteresis_model_opts)
 
@@ -248,6 +234,7 @@ def get_params(
     add_initial_concentrations(
         parameter_values,
         phases_by_electrode,
+        use_hysteresis=use_hysteresis,
         hysteresis_preceding_branches=hysteresis_preceding_branches,
         hysteresis_initial_branches=hysteresis_initial_branches,
         SOC_init=SOC_init,
@@ -258,9 +245,6 @@ def get_params(
     model_opts = _combine_model_opts(required_model_opts, extra_model_opts)
     model_class = get_model_class(model_type)
     model = model_class(options=model_opts)
-
-    if add_hysteresis_heat_source:
-        _add_hysteresis_heat_source(model)
 
     if trim_model_events:
         apply_trim_model_events(model, SOC_init)
@@ -506,17 +490,8 @@ def apply_hysteresis_branch(parameter_values, hysteresis_branch, phases_by_elect
 
 
 def get_hysteresis_model_by_electrode(hysteresis_model, parameter_values, electrode, phases):
-    PyBaMM_version = get_PyBaMM_version()
-    if hysteresis_model == "zero-state":
-        hysteresis_model_PyBaMM = "current sigmoid"
-    elif hysteresis_model == "one-state":
-        hysteresis_model_PyBaMM = "Wycisk"
-
-        if PyBaMM_version == Version("25.8"):
-            hysteresis_model_PyBaMM = "one-state differential capacity hysteresis"
-
-    else:
-        raise ValueError(f"Invalid hysteresis model: {hysteresis_model}")
+    _validate_in_list(hysteresis_model, PYBAMM_HYSTERESIS_MODELS, "hysteresis model")
+    hysteresis_model_PyBaMM = PYBAMM_HYSTERESIS_MODELS[hysteresis_model]
 
     has_hysteresis_data_by_phase = [
         _has_hysteresis_data(parameter_values, electrode, phase)
@@ -534,27 +509,18 @@ def get_hysteresis_model_by_electrode(hysteresis_model, parameter_values, electr
 def apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_electrode):
     for electrode, phases, use_hysteresis_electrode in zip(ELECTRODES, phases_by_electrode, use_hysteresis):
         for phase, use_hysteresis_phase in zip(phases, use_hysteresis_electrode):
-            if use_hysteresis_phase == "Wycisk" or use_hysteresis_phase == "one-state differential capacity hysteresis":
-                # Enforce zero switching factor
-                key_switch = f"{phase + electrode} particle hysteresis switching factor"
-                if key_switch in parameter_values and parameter_values[key_switch] != 0:
-                    raise ValueError(f"{key_switch} only supported with zero value.")
-
-                # Set generic initial condition when hysteresis is active
-                key_init = f"{phase}Initial hysteresis state in {electrode.lower()} electrode"
+            if use_hysteresis_phase == "one-state hysteresis":
+                # Copy hysteresis decay rate to lithiation and delithiation branches
+                decay_rate = parameter_values[f"{phase}{electrode} particle hysteresis decay rate"]
+                params_decay_rate = {
+                    f"{phase}{electrode} particle {branch} hysteresis decay rate": decay_rate
+                    for branch in HYSTERESIS_BRANCHES_ELECTRODE
+                }
 
                 parameter_values.update(
-                    {
-                        key_switch: 0,
-                        key_init: 0,
-                    },
+                    params_decay_rate,
                     check_already_exists=False,
                 )
-
-                # Rebuild parameters for compatibility with "Wycisk" (one-state) OCP
-                for param in PARAMS_HYSTERESIS_DIFF:
-                    key = F"{phase}{electrode} electrode {param}"
-                    parameter_values[key] = _make_hysteresis_compatible(parameter_values[key])
 
 
 def apply_trim_model_events(model, SOC_init, SOC_tol=0.05):
@@ -576,7 +542,6 @@ def _validate_args_get_params(
     hysteresis_branch,
     hysteresis_preceding_state,
     blended_electrode,
-    add_hysteresis_heat_source,
     extra_model_opts,
     # no runtime validation checking on remaining arguments
     **kwargs,
@@ -585,11 +550,6 @@ def _validate_args_get_params(
     _validate_in_list(hysteresis_model, VALID_HYSTERESIS_MODELS, "hysteresis model")
     _validate_in_list(hysteresis_branch, VALID_HYSTERESIS_BRANCHES, "hysteresis branch")
     _validate_in_list(hysteresis_preceding_state, VALID_HYSTERESIS_BRANCHES, "hysteresis preceding state")
-
-    if add_hysteresis_heat_source and hysteresis_model != "one-state":
-        raise NotImplementedError(
-            "Hysteresis heat source can only be added to 'one-state' hysteresis model."
-        )
 
     if degradation_state is not None:
         if not isinstance(degradation_state, dict):

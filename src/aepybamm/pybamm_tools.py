@@ -14,14 +14,18 @@ from .bpx_tools import (
 )
 from .func import (
     _allow_unused_args_1d,
-    _make_OCP,
 )
 
-PYBAMM_VERSION_MINIMUM = Version("25.4")
-PYBAMM_VERSION_LATEST = Version("25.8.0")
+PYBAMM_VERSION_MINIMUM = Version("25.10")
+PYBAMM_VERSION_LATEST = Version("25.10.0")
 
 ELECTRODES = ["Negative", "Positive"]
 PYBAMM_MATERIAL_NAMES = ["Primary", "Secondary"]
+
+PYBAMM_HYSTERESIS_MODELS = {
+    "zero-state": "current sigmoid",
+    "one-state": "one-state hysteresis",
+}
 
 
 def get_PyBaMM_version():
@@ -82,106 +86,6 @@ def _scale_param(param, scaling):
         return func_revised
     else:
         return scaling * param
-
-
-def _make_hysteresis_compatible(func_PyBaMM):
-    try:
-        if "dUdT" in func_PyBaMM.keywords:
-            func_PyBaMM = func_PyBaMM.keywords["dUdT"]
-
-        if isinstance(func_PyBaMM, Number):
-            # Float-valued entropy coefficient, cast to PyBaMM object so it can be differentiated
-            return pybamm.Scalar(func_PyBaMM)
-
-        # Rebuild interpolant as hysteresis-compatible
-        data = _extract_interp_PyBaMM_BPX(func_PyBaMM)
-        return _make_OCP(data, hysteresis_compatible=True)
-    except AttributeError:
-        # Not a float or interpolant so assume that it is a correctly defined PyBaMM function and leave alone
-        return func_PyBaMM
-
-
-def _add_hysteresis_heat_source(model):
-    PyBaMM_version = get_PyBaMM_version()
-    if PyBaMM_version == Version("25.8"):
-        # PyBaMM 25.8 already includes the hysteresis heat source, so don't allow any manual changes!
-        return
-
-    thermal_model = model.submodels["thermal"]
-
-    # Compute supplementary heat source variables
-    Q_hys_by_electrode = {}
-    for electrode in ELECTRODES:
-        electrode_options = getattr(model.options, electrode.lower())
-        num_phases = int(electrode_options["particle phases"])
-
-        phases = [""]
-        if num_phases > 1:
-            phases = [(s.lower() + " ") for s in PYBAMM_MATERIAL_NAMES]
-
-        hysteresis_models = electrode_options["open-circuit potential"]
-        if isinstance(hysteresis_models, str):
-            hysteresis_models = [hysteresis_models]
-
-        Q_hys_el = 0
-        for phase, hysteresis_model in zip(phases, hysteresis_models):
-            if hysteresis_model == 'single':
-                # No hysteresis for this phase, so no contributing heat source
-                V_hys_el = 0
-            elif hysteresis_model == 'current sigmoid':
-                raise NotImplementedError("Hysteresis heat source is not yet supported for zero-state hysteresis.")
-            elif hysteresis_model == 'Wycisk' or hysteresis_model == 'one-state differential capacity hysteresis':
-                V_hys_el = (
-                    model.variables[f"{electrode} electrode {phase}OCP hysteresis [V]"]
-                    * model.variables[f"{electrode} electrode {phase}hysteresis state distribution"]
-                )
-
-            ifar_vol_el = model.variables[
-                f"{electrode} electrode {phase}volumetric interfacial current density [A.m-3]"
-            ]
-            Q_hys_el += V_hys_el * ifar_vol_el
-
-        Q_hys_by_electrode[electrode] = Q_hys_el
-
-    Q_hys = pybamm.concatenation(
-        Q_hys_by_electrode["Negative"],
-        pybamm.FullBroadcast(0, "separator", "current collector"),
-        Q_hys_by_electrode["Positive"],
-    )
-    Q_hys_av = thermal_model._x_average(Q_hys, 0, 0)
-    Q_hys_Wm2 = Q_hys_av * model.param.L
-    Ageom_tot = model.param.n_electrodes_parallel *  model.param.L_y * model.param.L_z
-    Q_hys_W = thermal_model._yz_average(Q_hys_Wm2) * Ageom_tot
-    Q_hys_vol_av = Q_hys_W / model.param.V_cell
-
-    model.variables.update(
-        {
-            "Hysteresis electrochemical heating [W.m-3]": Q_hys,
-            "X-averaged hysteresis electrochemical heating [W.m-3]": Q_hys_av,
-            "Hysteresis electrochemical heating per unit electrode-pair area [W.m-2]": Q_hys_Wm2,
-            "Hysteresis electrochemical heating [W]": Q_hys_W,
-            "Volume-averaged hysteresis electrochemical heating [W.m-3]": Q_hys_vol_av,
-        }
-    )
-
-    model.variables["Total heating [W.m-3]"] += Q_hys
-    model.variables["X-averaged total heating [W.m-3]"] += Q_hys_av
-    model.variables["Total heating per unit electrode-pair area [W.m-2]"] += Q_hys_Wm2
-    model.variables["Total heating [W]"] += Q_hys_W
-    model.variables["Volume-averaged total heating [W.m-3]"] += Q_hys_vol_av
-
-    if model.options["thermal"] == "lumped":
-        # Note (UNCERTAIN IMPLEMENTATION):
-        # not clear why this is still apparently necessary when the
-        # total electrochemical heating is already augmented,
-        # but required for energy conservation from testing.
-
-        # Add additional heat source to lumped heat equation, targeting existing entry
-        T_vol_av = model.variables["Volume-averaged cell temperature [K]"]
-        rho_c_p_eff_av = model.variables["Volume-averaged effective heat capacity [J.K-1.m-3]"]
-        thermal_model.rhs[T_vol_av] += Q_hys_vol_av  / rho_c_p_eff_av
-
-        model._rhs.update({ T_vol_av: thermal_model.rhs[T_vol_av] })
 
 
 def _extract_interp_PyBaMM_BPX(func_PyBaMM):
@@ -282,12 +186,8 @@ def process_userdefined_parameters(parameter_values, params_bpx):
             electrode = param.split()[0]
         electrode += " electrode"
         
-        PyBaMM_version = get_PyBaMM_version()
-        n_electrodes = (parameter_values["Number of electrodes connected in parallel to make a cell"] if PyBaMM_version >= Version("25.8.0") else 1)
-        avol_phase = parameter_values[f"{phase}{electrode} surface area per unit volume [m-1]"]
-        L_el = parameter_values[f"{electrode} thickness [m]"]
-        Ageom_cell = parameter_values["Electrode area [m2]"]
-        decay_rate_multiplier = avol_phase * L_el * Ageom_cell * n_electrodes / 3600
+        # Rescale hysteresis decay rate according to About:Energy legacy convention
+        decay_rate_multiplier = 2
 
         if isinstance(parameter_values[param], functools.partial):
             func_original = parameter_values[param].keywords['fun']
@@ -304,22 +204,8 @@ def fix_parameter_values(parameter_values, params_bpx):
     Fix known bugs in output from pybamm.ParameterValues.create_from_bpx()
     """
     PyBaMM_version = get_PyBaMM_version()
-
-    if PyBaMM_version <= Version("25.8"):
-        # Workaround for incorrect porosity import
-        # - https://github.com/pybamm-team/PyBaMM/issues/5193, not fixed as of PyBaMM 25.8
-        domains_bpx = (
-            params_bpx.parameterisation.negative_electrode,
-            params_bpx.parameterisation.separator,
-            params_bpx.parameterisation.positive_electrode,
-        )
-        domains_pybamm = ("Negative electrode", "Separator", "Positive electrode")
-
-        for domain_pybamm, domain_bpx in zip(domains_pybamm, domains_bpx):
-            parameter_values[f"{domain_pybamm} porosity"] = domain_bpx.porosity
-            parameter_values[f"{domain_pybamm} Bruggeman coefficient (electrolyte)"] = (
-                np.log(domain_bpx.transport_efficiency) / np.log(domain_bpx.porosity)
-            )
+    # No current known bugs
+    pass
 
 
 def strip_parameter_values(parameter_values):
@@ -345,3 +231,28 @@ def strip_parameter_values(parameter_values):
 
 def get_model_class(model_name):
     return getattr(pybamm.lithium_ion, model_name)
+
+
+def update_PyBaMM_experiment(experiment, **kwargs):
+    """
+    Update the 'args' attribute of a pybamm.Experiment with the content of kwargs.
+    Returns a new pybamm.Experiment to ensure correct argument-based initialization.
+
+    Allowed kwargs match the keyword arguments of pybamm.Experiment.__init__():
+
+    - "operating_conditions", "period", "temperature", "termination"
+    """
+    kwargs_old = _PyBaMM_experiment_args_as_dict(experiment)
+    kwargs_new = kwargs_old | kwargs
+
+    return pybamm.Experiment(**kwargs_new)
+
+
+def _PyBaMM_experiment_args_as_dict(experiment):
+    """
+    Return the 'args' attribute of a pybamm.Experiment as a dict.
+    """
+    PYBAMM_EXPERIMENT_KWARGS = (
+        "operating_conditions", "period", "temperature", "termination",
+    )
+    return dict(zip(PYBAMM_EXPERIMENT_KWARGS, experiment.args))
