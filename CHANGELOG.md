@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.2.0 - 2025-11-05
+
+### Added
+
+- `pybamm_print_tools` module, with function `pybamm_print_tools.as_string()` to generate a readable plain text summary of the mathematical definition of a PyBaMM model.
+- Helper function `pybamm_tools.update_PyBaMM_experiment()` to update the arguments of an existing `pybamm.Experiment` instance.
+
+### Fixed
+
+- Rescaled hysteresis decay rate parameters imported from BPX files so that one-state hysteresis follows PyBaMM 25.10 parameter definitions.
+
+### Changed
+
+- Updated `pybamm` dependency to `>=25.10`. PyBaMM <= 25.8 is no longer supported.
+- One-state hysteresis is now implemented internally using the simpler "one-state hysteresis" model (formerly 'Axen' model) rather than by editing the "one-state differential capacity hysteresis" model (formerly 'Wycisk' model). The actual mathematical model is unchanged.
+- Various internal refactors.
+
+### Removed
+
+- Removed `add_hysteresis_heat_source` option from `get_params()` as PyBaMM's default model now includes this heat source contribution.
+- Removed various internal functions that are no longer required for PyBaMM >= 25.10.
+
 ## v0.1.4 - 2025-10-23
 
 ### Added
