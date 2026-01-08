@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## v0.2.1 - 2026-01-08
 
 ### Added
-- Support for multiphase resistance degradation for negative electrode.
+- Support for material-specific faradaic resistance increase in multi-material negative electrode degradation state.
 
 ### Fixed
 - Fixed bug setting hysteresis initial state for positive electrode.
