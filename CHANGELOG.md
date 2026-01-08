@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for multiphase resistance degradation for negative electrode.
 
 ### Fixed
-- Fixed hysteresis initial state for positive electrode bug.
+- Fixed bug setting hysteresis initial state for positive electrode.
 - Improved stability of lithiation bounds calculation across parameter sets.
 
 ## v0.2.0 - 2025-11-05
