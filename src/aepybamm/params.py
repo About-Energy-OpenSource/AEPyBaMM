@@ -42,6 +42,8 @@ VALID_DEGRADATION_KEYS = [
     "LAM_PE",
     "LLI",
     "RI_far_NE",
+    "RI_far_NE_C6",
+    "RI_far_NE_Si",
     "RI_far_PE",
     "RI_electrolyte",
     "R0_addn [Ohm]",
@@ -49,6 +51,9 @@ VALID_DEGRADATION_KEYS = [
 
 SINGLE_PHASE_LAM = ["LAM_NE", "LAM_PE"]
 MULTI_PHASE_LAM = ["LAM_NE_C6", "LAM_NE_Si", "LAM_PE"]
+
+SINGLE_PHASE_RI = ["RI_far_NE", "RI_far_PE"]
+MULTI_PHASE_RI = ["RI_far_NE_C6", "RI_far_NE_Si", "RI_far_PE"]
 
 PARAMS_HYSTERESIS_DIFF = [
     "lithiation OCP [V]",
@@ -100,7 +105,7 @@ def get_params(
         'OCV_init' is only compatible with single-phase parameter sets without hysteresis (hysteresis_model="none", blended_electrode=None)
     degradation_state : dict
         Dict values are floats with allowed fields any of "LAM_PE", "LAM_NE", "LLI" for corresponding thermodynamic degradation modes,
-        and any of "RI_far_PE", "RI_far_NE", "RI_electrolyte", "R0_addn [Ohm]" for corresponding resistance increases.
+        and any of "RI_far_PE", "RI_far_NE", "RI_far_NE_C6", "RI_far_NE_Si", "RI_electrolyte", "R0_addn [Ohm]" for corresponding resistance increases.
         'degradation_state' is only compatible with single-phase parameter sets without hysteresis (hysteresis_model="none", blended_electrode=None)
     htc_ext : float (optional)
         External heat transfer coefficient (W/m^2/K) for lumped thermal model.
@@ -343,10 +348,23 @@ def apply_degradation_state(parameter_values, degradation_state, phases_by_elect
     degradation_scaled_vals.update(updated_volume_fractions)
 
     # Apply resistance increase multiples
+    RI_losses = MULTI_PHASE_RI if is_multi_phase else SINGLE_PHASE_RI
+
+    if is_multi_phase and "RI_far_NE" in degradation_state:
+        print("Warning: RI_far_NE is being applied equally to both materials. "
+            "Consider using RI_far_NE_C6 and RI_far_NE_Si instead.")
+        degradation_state.update({
+            "RI_far_NE_C6": degradation_state["RI_far_NE"],
+            "RI_far_NE_Si": degradation_state["RI_far_NE"]
+        })
+    
     kinetic_params = [
-        f"{el} electrode exchange-current density [A.m-2]" for el in ELECTRODES
+        f"{phase}{el} electrode exchange-current density [A.m-2]"
+        for el, phases in zip(ELECTRODES, phases_by_electrode)
+        for phase in phases
     ]
-    for loss_factor, param in zip(["RI_far_NE", "RI_far_PE"], kinetic_params):
+
+    for loss_factor, param in zip(RI_losses, kinetic_params):
         if loss_factor in degradation_state:
             mul_far = 1 / (1 + degradation_state[loss_factor])
             degradation_scaled_vals[param] = _scale_param(parameter_values[param], mul_far)

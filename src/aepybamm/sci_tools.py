@@ -187,18 +187,16 @@ def calc_xLi_init(rel_xLi_ave, lithiation_bounds_mat, ocp_mat=None, qprop_mat=No
             return residual
             
         # Try a sequence of increasingly diverse starting guesses
-        _fsolve_error = None
         for guess in (0.5, 0.01, 0.001, 0.0001):
             try:
                 x0 = guess * np.ones(nmat + 1)
                 x1 = _fsolve_safe(func, x0)
-                break
-            except RuntimeError as err:
-                _fsolve_error = err
-        else:
-            raise _fsolve_error
+                return x1[:-1]
+            except RuntimeError:
+                continue
+        raise RuntimeError("Failed to find initial lithiation extents")
 
-        return x1[:-1]
+
 
 
 def calc_lithium_inventory(parameter_values, phases_by_electrode):
@@ -291,24 +289,25 @@ def compute_lithiation_bounds(parameter_values, phases_by_electrode, use_hystere
             _eval_OCP(ocp_pos, xLi_pos) - Uneg - Vcell,
         ]
         return residual
+
+    def _fsolve_try_bound_init(func, guess_iter, *args, **kwargs):
+        for x0 in guess_iter():
+            try:
+                return _fsolve_safe(func, x0, *args, **kwargs)
+            except RuntimeError as err:
+                continue
+        raise RuntimeError("Failed to find initial bounds")
+
+    def _lower_bound_init_iter():
+        for g_low in (0.1, 0.01, 1e-3, 1e-4):
+            yield [g_low] * len(phases_neg) + [0.9, _eval_OCP(ocp_neg["discharge"][0], g_low)]
+
+    def _upper_bount_init_iter():
+        for g_upper in (0.1, 0.2, 0.3, 0.4, 0.5):
+            yield [0.9] * len(phases_neg) + [g_upper, _eval_OCP(ocp_neg["charge"][0], 0.9)]
     
-    try:
-        bounds_init = (
-            [0.1] * len(phases_neg) + [0.9, _eval_OCP(ocp_neg["discharge"][0], 0.1)],
-            [0.9] * len(phases_neg) + [0.1, _eval_OCP(ocp_neg["charge"][0], 0.9)],
-        )
-
-        lower_bounds = _fsolve_safe(balance, bounds_init[0], args=(Veod, "discharge"))
-        upper_bounds = _fsolve_safe(balance, bounds_init[1], args=(Veoc, "charge"))
-    except RuntimeError:
-        # Try with a different initial guess
-        bounds_init = (
-            [0.01] * len(phases_neg) + [0.9, _eval_OCP(ocp_neg["discharge"][0], 0.01)],
-            [0.9] * len(phases_neg)  + [0.01, _eval_OCP(ocp_neg["charge"][0], 0.9)],
-        )
-
-        lower_bounds = _fsolve_safe(balance, bounds_init[0], args=(Veod, "discharge"))
-        upper_bounds = _fsolve_safe(balance, bounds_init[1], args=(Veoc, "charge"))
+    lower_bounds = _fsolve_try_bound_init(balance, _lower_bound_init_iter, args=(Veod, "discharge"))
+    upper_bounds = _fsolve_try_bound_init(balance, _upper_bount_init_iter, args=(Veoc, "charge"))
 
     bounds_all = [tuple(sorted(bounds)) for bounds in zip(lower_bounds, upper_bounds)]
     bounds_neg = bounds_all[:-2]
@@ -341,6 +340,12 @@ def add_initial_concentrations(
     hysteresis_preceding_branches = hysteresis_preceding_branches or ("", "")
     hysteresis_preceding_branch_neg, hysteresis_preceding_branch_pos = hysteresis_preceding_branches
     hysteresis_initial_branches = hysteresis_initial_branches or ("", "")
+
+    hysteresis_initial_branches = tuple([
+        [hysteresis_initial_branch_el] * len(phases_el)
+        for phases_el, hysteresis_initial_branch_el in zip(phases_by_electrode, hysteresis_initial_branches)
+    ])
+
     hysteresis_initial_branch_neg, hysteresis_initial_branch_pos = hysteresis_initial_branches
 
     if hysteresis_preceding_branch_pos != "":
@@ -372,14 +377,11 @@ def add_initial_concentrations(
         "Initial concentration in positive electrode [mol.m-3]": xLi_pos * parameter_values["Maximum concentration in positive electrode [mol.m-3]"],
     }
 
-    # Negative electrode
-    phases_neg, _ = phases_by_electrode
-    
+
     # Update initial hysteresis state for selected hysteresis branch
     if len(phases_neg) > 1:
-        hysteresis_initial_branch_neg = ["", hysteresis_initial_branch_neg]
-    else: 
-        hysteresis_initial_branch_neg = [hysteresis_initial_branch_neg]
+        hysteresis_initial_branch_neg[0] = ""
+
     hysteresis_initial_branches = (hysteresis_initial_branch_neg, hysteresis_initial_branch_pos)
 
     for electrode, phases, use_hysteresis_electrode, hysteresis_initial_branches_el in zip(ELECTRODES, phases_by_electrode, use_hysteresis, hysteresis_initial_branches):
