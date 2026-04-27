@@ -362,10 +362,7 @@ def add_initial_concentrations(
             for bound, val in zip(["minimum", "maximum"], bounds_mat)           
         }
 
-        parameter_values.update(
-            xLi_vals,
-            check_already_exists=False,
-        )
+        parameter_values.update(xLi_vals)
     else:
         # Existing lithiation bounds are valid so just read them
         lithiation_bounds = _get_lithiation_bounds(parameter_values, phases_by_electrode=phases_by_electrode)
@@ -390,7 +387,6 @@ def add_initial_concentrations(
                 key_init_hysteresis_state = f"{phase}Initial hysteresis state in {electrode.lower()} electrode"
                 parameter_values.update(
                     {key_init_hysteresis_state: HYSTERESIS_INIT_STATE_VALS[hysteresis_initial_branch_phase.rstrip()]},
-                    check_already_exists=False,
                 )
 
     if len(phases_neg) == 1:
@@ -420,10 +416,8 @@ def add_initial_concentrations(
 
     # Update initial concentrations
     c0_vals = (c0_vals_neg | c0_vals_pos)
-    parameter_values.update(
-        c0_vals,
-        check_already_exists=False,
-    )
+    parameter_values.update(c0_vals)
+
 
 def get_ocv_thermodynamic(parameter_values, phases_by_electrode, use_hysteresis=None, branch="average", num=201):
     """
