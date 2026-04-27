@@ -16,8 +16,9 @@ from .func import (
     _allow_unused_args_1d,
 )
 
-PYBAMM_VERSION_MINIMUM = Version("25.10")
-PYBAMM_VERSION_LATEST = Version("25.10.0")
+
+PYBAMM_VERSION_MINIMUM = Version("26.4")
+PYBAMM_VERSION_LATEST = Version("26.4.1")
 
 ELECTRODES = ["Negative", "Positive"]
 PYBAMM_MATERIAL_NAMES = ["Primary", "Secondary"]
@@ -167,10 +168,7 @@ def process_userdefined_parameters(parameter_values, params_bpx):
                     for param in params_to_replace
                 }
 
-                parameter_values.update(
-                    params_new,
-                    check_already_exists=False,
-                )
+                parameter_values.update(params_new)
 
     # Handle peculiar definition of decay rate. A:E BPX JSON specifies a 'true' decay rate from the Plett model.
     # (discussion at https://github.com/pybamm-team/PyBaMM/issues/4332, not yet fixed)

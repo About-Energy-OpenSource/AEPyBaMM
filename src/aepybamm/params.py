@@ -384,19 +384,13 @@ def apply_degradation_state(parameter_values, degradation_state, phases_by_elect
         R0_new = R0_existing + degradation_state["R0_addn [Ohm]"]
         degradation_scaled_vals.update({"Contact resistance [Ohm]": R0_new})
 
-    parameter_values.update(
-        degradation_scaled_vals,
-        check_already_exists=False,
-    )
+    parameter_values.update(degradation_scaled_vals)
 
 
 def apply_htc_ext(parameter_values, htc_ext):
     # Add heat transfer coefficient
     parameter_values.update(
-        {
-            "Total heat transfer coefficient [W.m-2.K-1]": htc_ext,
-        },
-        check_already_exists=False,
+        {"Total heat transfer coefficient [W.m-2.K-1]": htc_ext},
     )
 
 
@@ -535,10 +529,7 @@ def apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_elect
                     for branch in HYSTERESIS_BRANCHES_ELECTRODE
                 }
 
-                parameter_values.update(
-                    params_decay_rate,
-                    check_already_exists=False,
-                )
+                parameter_values.update(params_decay_rate)
 
 
 def apply_trim_model_events(model, SOC_init, SOC_tol=0.05):
