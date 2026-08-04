@@ -16,7 +16,7 @@ def compare(sol, experiment, dict_cols, title=""):
     title : str (optional)
         Text for validation plot title.
     """
-    
+
     # Load experimental data
     data = pd.read_csv(experiment).to_numpy()
 
@@ -26,7 +26,7 @@ def compare(sol, experiment, dict_cols, title=""):
     current_data_sim = np.column_stack((sol["Time [s]"].entries, -sol["Current [A]"].entries))
     temp_data_sim = np.column_stack((sol["Time [s]"].entries, sol["Volume-averaged cell temperature [K]"].entries - 273.15))
     dV_sim_exp = np.column_stack((voltage_data_exp[:, 0], sol["Terminal voltage [V]"](t=voltage_data_exp[:, 0]) - voltage_data_exp[:, 1]))
-    
+
     # Plot
     fig, ax = plt.subplots(2, 2, figsize=(12, 8))
     ax[0][0].plot(current_data_sim[:, 0], current_data_sim[:, 1], 'k')
@@ -54,7 +54,7 @@ def compare(sol, experiment, dict_cols, title=""):
     ax[1][1].text(0.8, 0.2, f"RMSE: {rmse:.2f} mV",
         horizontalalignment='center',
         verticalalignment='center',
-        transform = ax[1][1].transAxes,
+        transform=ax[1][1].transAxes,
     )
 
     for axis in ax.flatten():

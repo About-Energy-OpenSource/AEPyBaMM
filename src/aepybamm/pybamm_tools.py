@@ -1,26 +1,22 @@
-import functools
 import logging
 import warnings
+
 from numbers import Number
 
 import numpy as np
 import pybamm
+
 from packaging.version import Version
 
 from .bpx_tools import (
     _get_material_names,
-    as_bpx,
     validate_BPX_version,
 )
-from .func import (
-    _allow_unused_args_1d,
-)
 
 
-PYBAMM_VERSION_MINIMUM = Version("26.4")
-PYBAMM_VERSION_LATEST = Version("26.4.1")
+PYBAMM_VERSION_MINIMUM = Version("26.7")
+PYBAMM_VERSION_LATEST = Version("26.7.1.0")
 
-ELECTRODES = ["Negative", "Positive"]
 PYBAMM_MATERIAL_NAMES = ["Primary", "Secondary"]
 
 PYBAMM_HYSTERESIS_MODELS = {
@@ -79,16 +75,6 @@ def _as_PyBaMM_option(x):
     return out
 
 
-def _scale_param(param, scaling):
-    if callable(param):
-        def func_revised(*args, **kwargs):
-            return scaling * param(*args, **kwargs)
-
-        return func_revised
-    else:
-        return scaling * param
-
-
 def _extract_interp_PyBaMM_BPX(func_PyBaMM):
     """
     Get np.ndarrays out of an existing BPX-generated PyBaMM interpolant.
@@ -130,15 +116,13 @@ def _eval_OCP(Ufunc, xLi):
     return value
 
 
-def get_default_parameter_values(fp):
-    # Call library create_from_bpx()
+def get_default_parameter_values(params_bpx):
     # Any known bugs in library method will be fixed before parameter_values is returned
     # Ignore corresponding warnings
     with quiet_pybamm():
         # Do not pass SOC_init, initial concentrations will be added by the package
-        parameter_values = pybamm.ParameterValues.create_from_bpx(fp)
+        parameter_values = pybamm.ParameterValues._create_from_bpx(params_bpx, None)
 
-    params_bpx = as_bpx(fp)
     process_userdefined_parameters(parameter_values, params_bpx)
     fix_parameter_values(parameter_values, params_bpx)
     strip_parameter_values(parameter_values)
@@ -169,32 +153,6 @@ def process_userdefined_parameters(parameter_values, params_bpx):
                 }
 
                 parameter_values.update(params_new)
-
-    # Handle peculiar definition of decay rate. A:E BPX JSON specifies a 'true' decay rate from the Plett model.
-    # (discussion at https://github.com/pybamm-team/PyBaMM/issues/4332, not yet fixed)
-    decay_rate_params = [k for k in parameter_values if "hysteresis decay rate" in k]
-    for param in decay_rate_params:
-        if ":" in param:
-            # Multi-material electrode
-            phase = param.split(":")[0] + ": "
-            electrode = param.removeprefix(phase).split()[0]
-        else:
-            # Single-material electrode
-            phase = ""
-            electrode = param.split()[0]
-        electrode += " electrode"
-        
-        # Rescale hysteresis decay rate according to About:Energy legacy convention
-        decay_rate_multiplier = 2
-
-        if isinstance(parameter_values[param], functools.partial):
-            func_original = parameter_values[param].keywords['fun']
-            parameter_values[param] = _allow_unused_args_1d(
-                _scale_param(func_original, decay_rate_multiplier)
-            )
-        else:
-            # Scalar value
-            parameter_values[param] *= decay_rate_multiplier
 
 
 def fix_parameter_values(parameter_values, params_bpx):

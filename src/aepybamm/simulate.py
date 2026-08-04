@@ -66,7 +66,7 @@ def solve_from_expdata(
     # Create current interpolant
     current_interpolant = pybamm.Interpolant(
         drive_cycle[:, dict_cols["t"]],
-        -drive_cycle[:, dict_cols["I"]], # PyBaMM treats discharge as positive
+        -drive_cycle[:, dict_cols["I"]],  # PyBaMM treats discharge as positive
         pybamm.t
     )
 
@@ -86,16 +86,16 @@ def solve_from_expdata(
                              "with 'dict_cols' key either 'T' (K) or 'T_degC' (degC).")
         exp_temp_key = exp_temp_keys[0]
 
-        temp_drive_cycle = drive_cycle[:,[dict_cols["t"], dict_cols[exp_temp_key]]]
+        temp_drive_cycle = drive_cycle[:, [dict_cols["t"], dict_cols[exp_temp_key]]]
         if exp_temp_key == "T_degC":
-            temp_drive_cycle[:,1] += 273.15
+            temp_drive_cycle[:, 1] += 273.15
 
         if any([callable(parameter_values[param]) for param in ["Cation transference number", "Thermodynamic factor"]]):
             # Workaround for PyBaMM bug (https://github.com/pybamm-team/PyBaMM/issues/4670), unfixed at current release
-            def func_temp_drive_cycle(y,z,t):
+            def func_temp_drive_cycle(y, z, t):
                 dc = pybamm.Interpolant(
-                    temp_drive_cycle[:,0],
-                    temp_drive_cycle[:,1],
+                    temp_drive_cycle[:, 0],
+                    temp_drive_cycle[:, 1],
                     t,
                 )
 
@@ -105,18 +105,18 @@ def solve_from_expdata(
         else:
             # Expected approach without workaround
             temperature_interpolant = pybamm.Interpolant(
-                temp_drive_cycle[:,0],
-                temp_drive_cycle[:,1],
+                temp_drive_cycle[:, 0],
+                temp_drive_cycle[:, 1],
                 pybamm.t,
             )
 
         parameter_values.update(
             {
-                "Initial temperature [K]": temp_drive_cycle[0,1],
+                "Initial temperature [K]": temp_drive_cycle[0, 1],
                 "Ambient temperature [K]": temperature_interpolant,
             }
         )
-    
+
     default_tolerances = {
         "atol": 1e-4,
         "rtol": 1e-6,
@@ -148,14 +148,14 @@ def solve_from_expdata(
     submesh_types = model.default_submesh_types
     domains_micro = ["positive particle", "negative particle"]
     num_pts_domain = 32
-    var_pts = { k: num_pts_domain for k in ["x_n", "x_s", "x_p", "r_n", "r_p"]}
+    var_pts = {k: num_pts_domain for k in ["x_n", "x_s", "x_p", "r_n", "r_p"]}
 
     num_domains_micro_electrodes = [float(x) for x in model.options["particle phases"]]
     for electrode, num_domains_micro in zip(["negative", "positive"], num_domains_micro_electrodes):
         if num_domains_micro > 1:
             domains_micro.extend([f"{electrode} {phase} particle" for phase in ["primary", "secondary"]])
             var_pts.update(
-                { f"r_{electrode[0]}_{phase}": num_pts_domain for phase in ["prim", "sec"] }
+                {f"r_{electrode[0]}_{phase}": num_pts_domain for phase in ["prim", "sec"]}
             )
 
     for domain in domains_micro:
@@ -163,9 +163,9 @@ def solve_from_expdata(
             pybamm.Exponential1DSubMesh, submesh_params={"side": "right"}
         )
 
-    # Simulation 
+    # Simulation
     sim = pybamm.Simulation(
-        model, 
+        model,
         parameter_values=parameter_values,
         solver=solver,
         submesh_types=submesh_types,
