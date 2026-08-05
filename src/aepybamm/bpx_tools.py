@@ -3,6 +3,7 @@ import json
 import bpx
 
 from packaging.version import Version
+import numbers
 
 ELECTRODES = ["Negative", "Positive"]
 
@@ -126,7 +127,7 @@ def _migrate_ae_hysteresis(params):
     for param in decay_rate_params:
         decay_rate_multiplier = 2
 
-        if not isinstance(params_ud[param], (int, float)):
+        if not isinstance(params_ud[param], numbers.Number):
             # Support for functional hysteresis decay rates is deprecated in line with BPX v1.1.
             raise NotImplementedError(
                 f"Functional hysteresis decay rates are no longer supported ('{param}'). "

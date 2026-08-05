@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `get_params()` now accepts a parsed `bpx.BPX` object as well as a BPX JSON filepath.
 - `get_params(hysteresis_model=...)` now accepts a `(negative, positive)` tuple, allowing hysteresis to be configured independently for each electrode. A single string applies to both electrodes subject to appropriate hysteresis data being available, as before.
-- Support for BPX v1.1 parameter files. Legacy About:Energy BPX v0.x files are automatically converted to the v1.x schema on load. :
+- Support for BPX v1.1 parameter files. Legacy About:Energy BPX v0.x files are automatically converted to the v1.x schema on load:
   - the generic structural conversion is performed by the `bpx` library via `bpx.convert_v0_to_v1()`
   - the About:Energy-specific hysteresis parameters are moved out of `User-defined` and renamed (`electrode lithiation OCP [V]` → `OCP (lithiation) [V]`, `electrode delithiation OCP [V]` → `OCP (delithiation) [V]`, `particle hysteresis decay rate` → `OCP hysteresis decay constant`)
 
