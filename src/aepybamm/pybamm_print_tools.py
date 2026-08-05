@@ -1,6 +1,7 @@
 import pybamm
 
-from pybamm.expression_tree.symbol import is_scalar_zero, is_matrix_zero
+from pybamm.expression_tree.symbol import is_matrix_zero, is_scalar_zero
+
 
 STANDARD_SUBSTS = [
     ("0.0002777777777777778", "(1/3600)"),
@@ -104,7 +105,7 @@ def to_str(var, vardefs, expand=False):
 
     If 'expand' is True, expands the string representation in terms of the symbol's children.
     If 'expand' is False, returns the symbol's descriptive name from 'vardefs', else the symbol's internal name.
-    """    
+    """
     if not expand and var.id in vardefs:
         # Use the name description of the variable (key in model.variables) if present
         return vardefs[var.id]

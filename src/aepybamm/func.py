@@ -1,6 +1,16 @@
 import pybamm
 
 
+def _scale_param(param, scaling):
+    if callable(param):
+        def func_revised(*args, **kwargs):
+            return scaling * param(*args, **kwargs)
+
+        return func_revised
+    else:
+        return scaling * param
+
+
 def _unflatten(coeffs_flat):
     """
     Unflatten a flat dictionary with key hierarchy indicated by '.' as a separator character.
@@ -52,7 +62,7 @@ def _make_generic_func_ce_T(func_type, coeffs):
             a3 = 1 + (cM ** 4) * coeffs["p6"] * fT
 
             return (a1 * a2 / a3)
-    
+
     elif func_type == "Landesfeind2019_diff":
         def func(c_e, T):
             cM = c_e / 1000
@@ -85,9 +95,9 @@ def _make_j0_func(coeffs_const, func_premul=None):
             mul = func_premul(xLi)
         else:
             mul = 1
-        
-        arrhenius = pybamm.exp(coeffs_const["Ea"] / pybamm.constants.R * (1/coeffs_const["Tref"] - 1/T))
-        
+
+        arrhenius = pybamm.exp(coeffs_const["Ea"] / pybamm.constants.R * (1 / coeffs_const["Tref"] - 1 / T))
+
         return (mul * coeffs_const["j0_ref"] * arrhenius)
 
     return func
@@ -96,5 +106,5 @@ def _make_j0_func(coeffs_const, func_premul=None):
 def _allow_unused_args_1d(func):
     def _func_extended(x, *args):
         return func(x)
-    
+
     return _func_extended

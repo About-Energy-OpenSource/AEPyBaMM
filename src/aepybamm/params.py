@@ -1,19 +1,24 @@
 import json
 import os
 
+import bpx
 import numpy as np
+
 from pybamm import constants
 
+from .bpx_tools import (
+    as_bpx,
+)
 from .func import (
     _make_generic_func_ce_T,
     _make_j0_func,
+    _scale_param,
     _unflatten,
 )
 from .pybamm_tools import (
     PYBAMM_HYSTERESIS_MODELS,
     PYBAMM_MATERIAL_NAMES,
     _as_PyBaMM_option,
-    _scale_param,
     get_default_parameter_values,
     get_model_class,
     validate_PyBaMM_version,
@@ -32,6 +37,7 @@ from .sci_tools import (
     convert_soc,
     get_ocv_thermodynamic,
 )
+
 
 VALID_MODEL_TYPES = ["DFN", "SPMe", "SPM"]
 VALID_HYSTERESIS_MODELS = ["none", "zero-state", "one-state"]
@@ -64,7 +70,7 @@ PARAMS_HYSTERESIS_DIFF = [
 
 
 def get_params(
-    fp,
+    src,
     parameter_set=None,
     SOC_init=1,
     SOC_definition=None,
@@ -85,8 +91,8 @@ def get_params(
     from a BPX JSON file provided by About:Energy.
 
     ---
-    fp : str
-        Filepath of BPX JSON file
+    src : str or bpx.BPX
+        Source of the parameters: a filepath to a BPX JSON file, or a parsed 'bpx.BPX' object.
     parameter_set : str
         Placeholder, **not currently used**
     SOC_init : float
@@ -111,8 +117,10 @@ def get_params(
         External heat transfer coefficient (W/m^2/K) for lumped thermal model.
     model_type : str (optional, default: "DFN")
         Electrochemical model type. Allowed values: "DFN", "SPMe", "SPM"
-    hysteresis_model : str (optional)
-        "none" (default), "zero-state", "one-state" (Plett-Wycisk model)
+    hysteresis_model : str or 2-tuple of str (optional)
+        "none" (default), "zero-state", "one-state" (Plett-Wycisk model).
+        Pass a (negative, positive) tuple to set the model per electrode; a single string
+        is applied to both electrodes.
     hysteresis_branch : str (optional)
         Hysteresis branch to use when hysteresis_model is "none". Ignored if hysteresis_model is set.
         Allowed values: "average" (default), "charge", "discharge"
@@ -123,7 +131,7 @@ def get_params(
         Ignored if blended_electrode == None (False, False) or hysteresis_model == "none".
         Allowed values: "average" (default), "charge", "discharge"
     hysteresis_initial_state : str (optional)
-        Sets the value for the parameter "f"{phase}Initial hysteresis state in negative electrode" according to the specified hysteresis branch. 
+        Sets the value for the parameter "f"{phase}Initial hysteresis state in negative electrode" according to the specified hysteresis branch.
         If not specified, it is set to hysteresis_preceding_state.
         Ignored if blended_electrode == None (False, False) or hysteresis_model == "none".
         Allowed values: "average" (default), "charge", "discharge"
@@ -142,12 +150,22 @@ def get_params(
     required_model_opts = {}
     extra_model_opts = extra_model_opts or {}
     blended_electrode = blended_electrode or (False, False)
+    if isinstance(hysteresis_model, str):
+        hysteresis_model = (hysteresis_model, hysteresis_model)
+    elif not isinstance(hysteresis_model, tuple) or len(hysteresis_model) != 2:
+        raise ValueError(
+            "'hysteresis_model' must be a string or a 2-tuple with one entry per "
+            "electrode (negative, positive)."
+        )
     _validate_args_get_params(**locals())
-    fp_bpx = _get_bpx_src(fp, parameter_set)
+    if isinstance(src, bpx.BPX):
+        params_bpx = src
+    else:
+        params_bpx = as_bpx(_get_bpx_src(src, parameter_set))
 
     # Get parameter values at SOC = 1, fixing bugs where needed
     # SOC initialisation is applied later
-    parameter_values = get_default_parameter_values(fp_bpx)
+    parameter_values = get_default_parameter_values(params_bpx)
 
     # Add any functions defined in BPX "User-defined section"
     build_exchange_current_density(parameter_values)
@@ -184,27 +202,29 @@ def get_params(
     if degradation_state is not None:
         apply_degradation_state(parameter_values, degradation_state, phases_by_electrode)
 
-    # Hysteresis model handling
-    if hysteresis_model == "none":
+    # Hysteresis model handling ('hysteresis_model' is a (negative, positive) tuple)
+    if all(electrode_model == "none" for electrode_model in hysteresis_model):
         hysteresis_preceding_branches = None
         hysteresis_initial_branches = None
         use_hysteresis = _get_null_use_hysteresis(phases_by_electrode)
         if hysteresis_branch != "average":
             apply_hysteresis_branch(parameter_values, hysteresis_branch, phases_by_electrode)
     else:
-        # Case where hysteresis_model != "none"
+        # Case where at least one electrode uses a hysteresis model.
+        # A "none" electrode gets no hysteresis; otherwise the model is applied per phase,
+        # which only enables it on phases that have hysteresis data (e.g. silicon in a blend).
         use_hysteresis = tuple(
-            get_hysteresis_model_by_electrode(
-                hysteresis_model,
+            ["single"] * len(phases) if electrode_model == "none"
+            else get_hysteresis_model_by_electrode(
+                electrode_model,
                 parameter_values,
                 electrode,
                 phases,
             )
-            for electrode, phases in zip(ELECTRODES, phases_by_electrode)
+            for electrode_model, electrode, phases in zip(
+                hysteresis_model, ELECTRODES, phases_by_electrode
+            )
         )
-
-        if hysteresis_model == "one-state":
-            apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_electrode)
 
         # Set hysteresis_initial_state to hysteresis_preceding_state if not specified
         if hysteresis_initial_state is None:
@@ -227,7 +247,7 @@ def get_params(
         required_model_opts.update(hysteresis_model_opts)
 
     # Apply initial concentrations
-    SOC_init=convert_soc_init(
+    SOC_init = convert_soc_init(
         SOC_init,
         OCV_init,
         SOC_definition,
@@ -245,6 +265,11 @@ def get_params(
         SOC_init=SOC_init,
         update_bounds=(degradation_state is not None),
     )
+
+    # PyBaMM 26.7 defaults this to "true" (https://github.com/pybamm-team/PyBaMM/pull/5573),
+    # which regresses the validated results for current-interpolant drive cycles.
+    # Preserve the PyBaMM <=26.6 formulation unless the caller opts in.
+    extra_model_opts.setdefault("voltage as a state", "false")
 
     # Create model
     model_opts = _combine_model_opts(required_model_opts, extra_model_opts)
@@ -277,13 +302,13 @@ def convert_soc_init(SOC_init, OCV_init, SOC_definition, parameter_values, phase
             if OCV_init < ocv_soc[0, 1]:
                 # Linear extrapolate low
                 SOC_init = (
-                    ocv_soc[0, 1] + 
+                    ocv_soc[0, 1] +
                     (OCV_init - ocv_soc[0, 1]) * (ocv_soc[1, 1] - ocv_soc[0, 1]) / (ocv_soc[1, 0] - ocv_soc[0, 0])
                 )
             elif OCV_init > ocv_soc[-1, 1]:
                 # Linear extrapolate high
                 SOC_init = (
-                    ocv_soc[-1, 1] + 
+                    ocv_soc[-1, 1] +
                     (OCV_init - ocv_soc[-1, 1]) * (ocv_soc[-1, 1] - ocv_soc[-2, 1]) / (ocv_soc[-1, 0] - ocv_soc[-2, 0])
                 )
             else:
@@ -332,7 +357,7 @@ def apply_degradation_state(parameter_values, degradation_state, phases_by_elect
             "LAM_NE_C6": degradation_state["LAM_NE"],
             "LAM_NE_Si": degradation_state["LAM_NE"]
         })
-    
+
     volume_fraction_params = []
     for el, phases in zip(ELECTRODES, phases_by_electrode):
         for phase in phases:
@@ -357,7 +382,7 @@ def apply_degradation_state(parameter_values, degradation_state, phases_by_elect
             "RI_far_NE_C6": degradation_state["RI_far_NE"],
             "RI_far_NE_Si": degradation_state["RI_far_NE"]
         })
-    
+
     kinetic_params = [
         f"{phase}{el} electrode exchange-current density [A.m-2]"
         for el, phases in zip(ELECTRODES, phases_by_electrode)
@@ -373,7 +398,7 @@ def apply_degradation_state(parameter_values, degradation_state, phases_by_elect
         mul_electrolyte = 1 / (1 + degradation_state["RI_electrolyte"])
         for param in ["Electrolyte conductivity [S.m-1]", "Electrolyte diffusivity [m2.s-1]"]:
             degradation_scaled_vals[param] = _scale_param(parameter_values[param], mul_electrolyte)
-    
+
     # Apply supplementary series resisatnce
     if "R0_addn [Ohm]" in degradation_state:
         if "Contact resistance [Ohm]" in parameter_values:
@@ -488,7 +513,7 @@ def _has_hysteresis_data(parameter_values, electrode, phase):
 def apply_hysteresis_branch(parameter_values, hysteresis_branch, phases_by_electrode):
     for electrode, phases in zip(ELECTRODES, phases_by_electrode):
         branch = HYSTERESIS_BRANCH_MAP[hysteresis_branch][electrode]
-        
+
         for phase in phases:
             if _has_hysteresis_data(parameter_values, electrode, phase):
                 ocp_dst = f"{phase + electrode} electrode OCP [V]"
@@ -518,20 +543,6 @@ def get_hysteresis_model_by_electrode(hysteresis_model, parameter_values, electr
     return hysteresis_model_by_electrode
 
 
-def apply_one_state_hysteresis(parameter_values, use_hysteresis, phases_by_electrode):
-    for electrode, phases, use_hysteresis_electrode in zip(ELECTRODES, phases_by_electrode, use_hysteresis):
-        for phase, use_hysteresis_phase in zip(phases, use_hysteresis_electrode):
-            if use_hysteresis_phase == "one-state hysteresis":
-                # Copy hysteresis decay rate to lithiation and delithiation branches
-                decay_rate = parameter_values[f"{phase}{electrode} particle hysteresis decay rate"]
-                params_decay_rate = {
-                    f"{phase}{electrode} particle {branch} hysteresis decay rate": decay_rate
-                    for branch in HYSTERESIS_BRANCHES_ELECTRODE
-                }
-
-                parameter_values.update(params_decay_rate)
-
-
 def apply_trim_model_events(model, SOC_init, SOC_tol=0.05):
     # Remove events that might cause unintended early model termination at initial conditions
     if SOC_init > (1 - SOC_tol):
@@ -556,7 +567,8 @@ def _validate_args_get_params(
     **kwargs,
 ):
     _validate_in_list(model_type, VALID_MODEL_TYPES, "model type")
-    _validate_in_list(hysteresis_model, VALID_HYSTERESIS_MODELS, "hysteresis model")
+    for electrode_model in hysteresis_model:
+        _validate_in_list(electrode_model, VALID_HYSTERESIS_MODELS, "hysteresis model")
     _validate_in_list(hysteresis_branch, VALID_HYSTERESIS_BRANCHES, "hysteresis branch")
     _validate_in_list(hysteresis_preceding_state, VALID_HYSTERESIS_BRANCHES, "hysteresis preceding state")
 
@@ -580,7 +592,7 @@ def _validate_args_get_params(
         if not isinstance(SOC_definition, dict) or "data" not in SOC_definition:
             raise TypeError("SOC_definition must be a dict containing a key 'data'")
 
-        if any(blended_electrode) or hysteresis_model != "none":
+        if any(blended_electrode) or any(m != "none" for m in hysteresis_model):
             raise NotImplementedError(
                 "OCV-SOC conversion is only supported for single-phase electrodes with no hysteresis."
             )
@@ -618,7 +630,7 @@ def _get_bpx_src(fp, parameter_set=None):
 def _rationalize_degradation_state(degradation_state):
     if degradation_state is None:
         return None
-    
+
     degradation_state_no_zeroes = {
         k: v for k, v in degradation_state.items()
         if v != 0

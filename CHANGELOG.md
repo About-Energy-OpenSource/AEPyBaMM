@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.2.3 - 2026-08-04
+
+### Added
+
+- `get_params()` now accepts a parsed `bpx.BPX` object as well as a BPX JSON filepath.
+- `get_params(hysteresis_model=...)` now accepts a `(negative, positive)` tuple, allowing hysteresis to be configured independently for each electrode. A single string applies to both electrodes subject to appropriate hysteresis data being available, as before.
+- Support for BPX v1.1 parameter files. Legacy About:Energy BPX v0.x files are automatically converted to the v1.x schema on load:
+  - the generic structural conversion is performed by the `bpx` library via `bpx.convert_v0_to_v1()`
+  - the About:Energy-specific hysteresis parameters are moved out of `User-defined` and renamed (`electrode lithiation OCP [V]` → `OCP (lithiation) [V]`, `electrode delithiation OCP [V]` → `OCP (delithiation) [V]`, `particle hysteresis decay rate` → `OCP hysteresis decay constant`)
+
+### Changed
+
+- Default `voltage as a state` to `"false"` to preserve the validated PyBaMM <=26.6 formulation for interpolated-current drive cycles after PyBaMM 26.7 changed its upstream default to `"true"`. ([pybamm-team/PyBaMM#5573](https://github.com/pybamm-team/PyBaMM/pull/5573))
+- Updated `pybamm` dependency to `>=26.7,<26.8` and runtime `bpx` dependency to `==1.1.1`. PyBaMM < 26.7 and runtime BPX < 1.1.1 are no longer supported.
+- Parameter input data now conforms to the BPX v1.1 definition.
+
+### Removed
+
+- Removed the redundant `apply_one_state_hysteresis()` function; copying the decay rate to the lithiation/delithiation branches is no longer required under PyBaMM >= 26.6.
+- Dropped support for functional (lithiation-dependent) hysteresis decay rates. BPX v1.1 only permits a scalar `OCP hysteresis decay constant`, so legacy A:E BPX v0.x files that specify the `particle hysteresis decay rate` as a function of lithiation extent (e.g. interpolated data) are no longer supported and now raise a clear error on load. Use `aepybamm <= 0.2.2` if a functional decay rate is required.
+
+
 ## v0.2.2 - 2026-04-27
 
 ### Changed
