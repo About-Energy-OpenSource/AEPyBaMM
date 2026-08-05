@@ -19,6 +19,9 @@ dependencies = [
     "pandas[output-formatting]",
     "pybamm[bpx] >=26.7, <26.8",
     "bpx == 1.1.1",
+    "ipywidgets", 
+    "ipython", 
+    "ipykernel",
 ]
 requires-python = ">=3.10"
 classifiers = [
