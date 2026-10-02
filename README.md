@@ -6,6 +6,8 @@ AEPyBaMM is an interface between the [PyBaMM](https://pybamm.org) package for ba
 
 The core functionality of AEPyBaMM is expressed through the function `get_params`, which combines a BPX parameter set and any user-defined options to yield a tuple of self-consistent `pybamm.ParameterValues` and `pybamm.lithium_ion.{model}` objects.
 
+A reference example is given in [`examples/molicel_p45b_example.ipynb`](examples/molicel_p45b_example.ipynb), which simulates the Molicel P45B cell using the parameter set described in [Physics-Based Parameterisation of a High-Power Silicon–Graphite Lithium-Ion Battery: Electrochemical Model of the Molicel P45B Cell](https://doi.org/10.1149/1945-7111/aea1c1).
+
 Example use case:
 
 ```python
